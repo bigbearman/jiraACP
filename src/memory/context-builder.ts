@@ -2,6 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StageId } from "../config/schema.js";
 
+type ReviewAgentId = "logic" | "quality";
+
+const REVIEW_AGENT_FILES: Record<ReviewAgentId, string> = {
+  logic: "review-logic.md",
+  quality: "review-quality.md",
+};
+
 export function writeTicketContext(
   memoryDir: string,
   ticket: {
@@ -68,6 +75,33 @@ export function writeReviewFeedback(
     path.join(memoryDir, "review-feedback.md"),
     lines.join("\n"),
   );
+}
+
+export function writeReviewAgentOutput(
+  memoryDir: string,
+  agentId: ReviewAgentId,
+  raw: string,
+): void {
+  fs.mkdirSync(memoryDir, { recursive: true });
+  const fileName = REVIEW_AGENT_FILES[agentId];
+  fs.writeFileSync(path.join(memoryDir, fileName), raw);
+}
+
+export function mergeReviewOutputs(memoryDir: string): string {
+  const parts: string[] = [];
+
+  for (const agentId of ["logic", "quality"] as const) {
+    const filePath = path.join(memoryDir, REVIEW_AGENT_FILES[agentId]);
+    if (fs.existsSync(filePath)) {
+      parts.push(
+        `## ${agentId} review\n\n${fs.readFileSync(filePath, "utf8")}`,
+      );
+    }
+  }
+
+  const merged = parts.join("\n\n---\n\n");
+  fs.writeFileSync(path.join(memoryDir, "review-feedback.md"), merged);
+  return merged;
 }
 
 export function getContextFilesForStage(

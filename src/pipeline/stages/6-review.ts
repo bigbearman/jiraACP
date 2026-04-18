@@ -3,6 +3,8 @@ import { runAgentsParallel } from "../runner.js";
 import {
   getContextFilesForStage,
   writeReviewFeedback,
+  writeReviewAgentOutput,
+  mergeReviewOutputs,
 } from "../../memory/context-builder.js";
 import { requestApproval } from "../../integrations/telegram/human-loop.js";
 
@@ -46,6 +48,13 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
           { ...agentOpts, prompt: logicPrompt },
           { ...agentOpts, prompt: qualityPrompt },
         );
+
+    // Write each agent's raw output to isolated files
+    writeReviewAgentOutput(memoryDir, "logic", logicRaw);
+    writeReviewAgentOutput(memoryDir, "quality", qualityRaw);
+
+    // Merge outputs sequentially before parsing
+    mergeReviewOutputs(memoryDir);
 
     const issues = [...parseIssues(logicRaw), ...parseIssues(qualityRaw)];
 
