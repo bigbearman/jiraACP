@@ -24,6 +24,27 @@ export type PipelineEvent =
   | { type: "HUMAN_APPROVED"; timestamp: string }
   | { type: "HUMAN_REJECTED"; reason: string; timestamp: string }
   | { type: "APPROVAL_REMINDER_SENT"; count: number; timestamp: string }
+  | {
+      type: "CI_POLLING_STARTED";
+      sha: string;
+      requiredChecks: string[];
+      timeoutMs: number;
+      timestamp: string;
+    }
+  | {
+      type: "CI_COMPLETED";
+      status: string;
+      passedCount: number;
+      failedCount: number;
+      durationMs: number;
+      timestamp: string;
+    }
+  | {
+      type: "CI_TIMEOUT";
+      elapsedMs: number;
+      pendingChecks: string[];
+      timestamp: string;
+    }
   | { type: "PIPELINE_COMPLETED"; timestamp: string }
   | { type: "PIPELINE_ABORTED"; reason: string; timestamp: string }
   | { type: "ANALYZE_PARSE_FALLBACK"; rawSnippet: string; timestamp: string }

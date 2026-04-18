@@ -1,5 +1,14 @@
 import { Octokit } from "@octokit/rest";
 
+export interface CheckRun {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
 export interface GitHubClient {
   createBranch(base: string, branch: string): Promise<void>;
   createPR(opts: {
@@ -20,6 +29,8 @@ export interface GitHubClient {
   getRunStatus(
     branch: string,
   ): Promise<"pending" | "success" | "failure" | "unknown">;
+  getCheckRuns(sha: string): Promise<CheckRun[]>;
+  getCheckRunLog(checkRunId: number): Promise<string>;
 }
 
 export function createGitHubClient(
@@ -119,6 +130,36 @@ export function createGitHubClient(
       } catch {
         return "unknown";
       }
+    },
+
+    async getCheckRuns(sha) {
+      const { data } = await octokit.checks.listForRef({
+        owner,
+        repo,
+        ref: sha,
+      });
+      return data.check_runs.map((run) => ({
+        id: run.id,
+        name: run.name,
+        status: run.status,
+        conclusion: run.conclusion ?? null,
+        startedAt: run.started_at ?? null,
+        completedAt: run.completed_at ?? null,
+      }));
+    },
+
+    async getCheckRunLog(checkRunId) {
+      const { data } = await octokit.checks.get({
+        owner,
+        repo,
+        check_run_id: checkRunId,
+      });
+      const output = data.output;
+      const text = output.text ?? output.summary ?? "";
+      if (text.length > 2000) {
+        return text.slice(0, 2000);
+      }
+      return text;
     },
   };
 }

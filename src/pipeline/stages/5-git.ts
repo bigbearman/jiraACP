@@ -1,6 +1,11 @@
 import type { Stage, PipelineContext, StageOutput } from "./types.js";
 import { spawnSafe } from "../../utils/process.js";
-import { readTicketContext } from "../../memory/context-builder.js";
+import {
+  readTicketContext,
+  writeCIStatus,
+} from "../../memory/context-builder.js";
+import { waitForCI } from "../ci-poller.js";
+import type { CIPollConfig } from "../ci-poller.js";
 
 export const gitStage: Stage = {
   id: "git",
@@ -91,7 +96,69 @@ export const gitStage: Stage = {
       await ctx.telegram
         .updateDetail(`PR #${prNumber} created`)
         .catch(() => undefined);
+
+      // CI polling after PR creation
+      if (config.github.waitForCI !== false) {
+        const shaResult = await spawnSafe("git", ["rev-parse", "HEAD"], {
+          cwd: workdir,
+        });
+        const sha = shaResult.stdout.trim();
+
+        const backoff = config.github.ciPollBackoff;
+        const pollConfig: CIPollConfig = {
+          timeoutMs: config.github.ciTimeoutMs,
+          initialMs: backoff.initialMs,
+          multiplier: backoff.multiplier,
+          maxMs: backoff.maxMs,
+          requiredChecks: config.github.requiredChecks,
+        };
+
+        state.emit({
+          type: "CI_POLLING_STARTED",
+          sha,
+          requiredChecks: pollConfig.requiredChecks,
+          timeoutMs: pollConfig.timeoutMs,
+        });
+
+        await ctx.telegram
+          .updateDetail("Waiting for CI checks…")
+          .catch(() => undefined);
+
+        const ciResult = await waitForCI(
+          ctx.github,
+          sha,
+          pollConfig,
+          ctx.logger,
+        );
+
+        if (ciResult.status === "timeout") {
+          state.emit({
+            type: "CI_TIMEOUT",
+            elapsedMs: ciResult.durationMs,
+            pendingChecks: ciResult.pendingChecks,
+          });
+        } else {
+          state.emit({
+            type: "CI_COMPLETED",
+            status: ciResult.status,
+            passedCount: ciResult.passedCount,
+            failedCount: ciResult.failedCount,
+            durationMs: ciResult.durationMs,
+          });
+        }
+
+        writeCIStatus(ctx.memoryDir, ciResult);
+        await ctx.telegram
+          .updateDetail(`CI: ${ciResult.status}`)
+          .catch(() => undefined);
+      }
+
       return { branchName, prNumber };
+    }
+
+    // Dry-run mode
+    if (config.github.waitForCI !== false) {
+      ctx.logger.info("Would wait for CI checks (skipped in dry-run mode)");
     }
 
     return { branchName, prNumber: null };

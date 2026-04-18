@@ -55,6 +55,16 @@ export const ProjectConfigSchema = z.object({
     prDraftByDefault: z.boolean().default(false),
     majorIssueThreshold: z.number().default(1),
     ciWaitTimeoutMs: z.number().default(600_000),
+    waitForCI: z.boolean().default(true),
+    ciTimeoutMs: z.number().default(1_800_000),
+    ciPollBackoff: z
+      .object({
+        initialMs: z.number().default(5_000),
+        multiplier: z.number().default(2),
+        maxMs: z.number().default(60_000),
+      })
+      .default({}),
+    requiredChecks: z.array(z.string()).default([]),
   }),
 
   workspace: z.object({
