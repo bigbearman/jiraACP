@@ -467,7 +467,7 @@ No `any`, explicit return types, `.js` ESM imports.
 
 ### TASK-013 — Memory file mutex for concurrent review agents
 
-- [ ] Status: pending
+- [x] Status: complete
 - File: `src/utils/file-lock.ts` (new), `src/memory/context-builder.ts` (add `writeReviewAgentOutput`, `mergeReviewOutputs`), `src/pipeline/stages/6-review.ts` (isolated agent outputs + merge step)
 - Scope:
   - Create `src/utils/file-lock.ts` with generic file-level lock using `O_EXCL` pattern (mirrors `src/utils/lock.ts`):
@@ -531,7 +531,7 @@ No `any`, explicit return types, `.js` ESM imports.
 
 ### TASK-014 — Analyze stage fallback on JSON parse failure
 
-- [ ] Status: pending
+- [x] Status: complete
 - File: `src/pipeline/stages/2-analyze.ts` (retry + fallback logic), `src/pipeline/state.ts` (add `ANALYZE_PARSE_FALLBACK` event type), `src/config/schema.ts` (add `analyzeFallbackScore` field)
 - Scope:
   - Add `ANALYZE_PARSE_FALLBACK` to the `PipelineEvent` union in `src/pipeline/state.ts`:
@@ -588,7 +588,7 @@ No `any`, explicit return types, `.js` ESM imports.
 
 ### TASK-015 — Review approval reminder pings
 
-- [ ] Status: pending
+- [x] Status: complete
 - File: `src/integrations/telegram/human-loop.ts` (add reminder loop in `requestApproval`), `src/config/schema.ts` (add `reminderInterval`, `maxReminders` fields), `src/pipeline/state.ts` (add `APPROVAL_REMINDER_SENT` event type)
 - Scope:
   - Add `APPROVAL_REMINDER_SENT` to the `PipelineEvent` union in `src/pipeline/state.ts`:
