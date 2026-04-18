@@ -714,7 +714,7 @@ No `any`, explicit return types, `.js` ESM imports.
 
 ### TASK-011 — Auto-rollback on deploy/test failure
 
-- [ ] Status: pending
+- [x] Status: complete
 - File: `src/pipeline/rollback.ts` (new), `src/pipeline/stages/7-deploy.ts` (call rollback on health-check failure), `src/pipeline/stages/8-test.ts` (call rollback on test failure), `src/pipeline/state.ts` (add `DEPLOY_ROLLED_BACK` event type), `src/config/schema.ts` (add `rollbackTimeoutMs` field), `src/integrations/telegram/notifier.ts` (add `notifyRollback` method)
 - Scope:
   - Add `DEPLOY_ROLLED_BACK` to the `PipelineEvent` union in `src/pipeline/state.ts`:
@@ -847,7 +847,7 @@ No `any`, explicit return types, `.js` ESM imports.
 
 ### TASK-012 — CI status polling with exponential backoff
 
-- [ ] Status: pending
+- [x] Status: complete
 - File: `src/pipeline/ci-poller.ts` (new), `src/integrations/github/client.ts` (add `getCheckRuns`, `getCheckRunLog` methods), `src/pipeline/stages/5-git.ts` (call `waitForCI` after PR creation), `src/config/schema.ts` (add `waitForCI`, `ciTimeoutMs`, `ciPollBackoff`, `requiredChecks` fields), `src/pipeline/state.ts` (add `CI_POLLING_STARTED`, `CI_COMPLETED`, `CI_TIMEOUT` event types), `src/memory/context-builder.ts` (add `writeCIStatus` export)
 - Scope:
   - Add CI event types to the `PipelineEvent` union in `src/pipeline/state.ts`:

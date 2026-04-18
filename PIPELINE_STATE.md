@@ -1,7 +1,7 @@
 # Pipeline State
 
 ## Current phase
-dev_loop
+complete
 
 ## Current wave
 2
@@ -14,7 +14,7 @@ dev_loop
 | Sprint 3 Wave 1 | TASK-001–007 (replay, pause, cancel-clarification, config set/edit, projects, usage) | complete | 2026-04-05 | 2026-04-05 |
 | Sprint 3 Wave 2 | TASK-008–010 (hooks, cost-guard, audit) | complete | 2026-04-05 | 2026-04-05 |
 | Sprint 4 Wave 1 | TASK-013, TASK-014, TASK-015 (memory mutex, analyze fallback, approval reminder) | complete | 2026-04-18 | 2026-04-18 |
-| Sprint 4 Wave 2 | TASK-011, TASK-012 (auto-rollback, CI polling backoff) | pending | 2026-04-18 | |
+| Sprint 4 Wave 2 | TASK-011, TASK-012 (auto-rollback, CI polling backoff) | complete | 2026-04-18 | 2026-04-18 |
 
 ## Blocked tasks
 | Task | Reason | Escalated |
@@ -34,3 +34,5 @@ true
 - 2026-04-18T00:00:00Z — Phase → dev_loop. Sprint 4 Wave 1 starting: TASK-013 (memory mutex), TASK-014 (analyze fallback), TASK-015 (approval reminder).
 - 2026-04-18T06:45:00Z — Wave 1 complete. 3 agents parallel (worktree isolation), all build+test pass. 341/341 tests green.
 - 2026-04-18T06:45:00Z — Wave 2 starting: TASK-011 (auto-rollback), TASK-012 (CI polling backoff).
+- 2026-04-18T07:04:00Z — Wave 2 complete. 2 agents parallel (worktree isolation), build+test pass. 341/341 tests green.
+- 2026-04-18T07:04:00Z — Sprint 4 complete. All 5 tasks done. Phase → complete.
