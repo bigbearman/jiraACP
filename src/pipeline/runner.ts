@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { Logger } from "pino";
 import { spawnSafe, buildMinimalEnv } from "../utils/process.js";
 
 export type AgentModel = "haiku" | "sonnet" | "opus";
@@ -16,6 +19,7 @@ export interface RunAgentOptions {
   timeoutMs?: number;
   stallTimeoutMs?: number;
   extraEnv?: Record<string, string>;
+  logger?: Logger;
 }
 
 export async function runAgent(opts: RunAgentOptions): Promise<string> {
@@ -27,17 +31,31 @@ export async function runAgent(opts: RunAgentOptions): Promise<string> {
     "text",
   ];
 
-  for (const f of opts.contextFiles ?? []) {
-    args.push("--context", f);
+  // --add-dir grants Claude read access to directories containing context files
+  const existingFiles = (opts.contextFiles ?? []).filter(fs.existsSync);
+  const dirs = [...new Set(existingFiles.map((f) => path.dirname(f)))];
+  for (const dir of dirs) {
+    args.push("--add-dir", dir);
   }
 
-  args.push(opts.prompt);
+  // Tell Claude which files to read so it picks them up automatically
+  const prompt =
+    existingFiles.length > 0
+      ? `${opts.prompt}\n\nContext files to read:\n${existingFiles.map((f) => `- ${f}`).join("\n")}`
+      : opts.prompt;
 
+  args.push(prompt);
+
+  let outputLines = 0;
   const result = await spawnSafe("claude", args, {
     cwd: opts.workdir,
     env: buildMinimalEnv(opts.extraEnv),
     timeoutMs: opts.timeoutMs ?? 1_800_000,
     stallTimeoutMs: opts.stallTimeoutMs ?? 300_000,
+    onStdout(chunk) {
+      outputLines += chunk.split("\n").length - 1;
+      opts.logger?.debug({ outputLines }, chunk.trimEnd());
+    },
   });
 
   if (result.exitCode !== 0) {

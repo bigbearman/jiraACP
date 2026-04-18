@@ -27,31 +27,101 @@ export const gitStage: Stage = {
       { ticketKey, branchName },
       "Pushing branch and creating PR",
     );
+    await ctx.telegram
+      .updateDetail(
+        `Pushing branch <code>${branchName}</code> and creating PR…`,
+      )
+      .catch(() => undefined);
 
     if (!ctx.dryRun) {
       // Push branch
-      await spawnSafe("git", ["push", "origin", branchName], { cwd: workdir });
+      const pushResult = await spawnSafe(
+        "git",
+        ["push", "origin", branchName],
+        { cwd: workdir },
+      );
+      if (pushResult.exitCode !== 0) {
+        const pushErr = classifyPushError(pushResult.stderr, branchName);
+        if (!pushErr.message.startsWith("BRANCH_ALREADY_EXISTS")) throw pushErr;
+        // Branch already on remote — skip push, proceed to createPR
+        ctx.logger.warn(
+          { ticketKey, branchName },
+          "Branch already on remote — skipping push",
+        );
+        await ctx.telegram
+          .updateDetail(`Branch already on remote, creating PR…`)
+          .catch(() => undefined);
+      }
 
       // Create PR via GitHub client
-      const prNumber = await ctx.github.createPR({
-        title: `[${ticketKey}] ${summary.trim()}`,
-        body: buildPrBody(ticketKey, ticketCtx),
-        head: branchName,
-        base: config.github.defaultBranch ?? "main",
-        draft: config.github.prDraftByDefault ?? false,
-      });
+      let prNumber: number;
+      try {
+        prNumber = await ctx.github.createPR({
+          title: `[${ticketKey}] ${summary.trim()}`,
+          body: buildPrBody(ticketKey, ticketCtx),
+          head: branchName,
+          base: config.github.defaultBranch ?? "main",
+          draft: config.github.prDraftByDefault ?? false,
+        });
+      } catch (err) {
+        const createErr = classifyCreatePrError(err, branchName);
+        if (!createErr.message.startsWith("PR_ALREADY_OPEN")) throw createErr;
+        // PR already open — find it and reuse
+        const existing = await ctx.github.findOpenPR(branchName);
+        if (existing === null) {
+          throw new Error(
+            `PR_NOT_FOUND: PR already exists for '${branchName}' but could not be located via API`,
+          );
+        }
+        ctx.logger.warn(
+          { ticketKey, branchName, prNumber: existing },
+          "PR already open — reusing",
+        );
+        await ctx.telegram
+          .updateDetail(`PR #${existing} already open — reusing`)
+          .catch(() => undefined);
+        prNumber = existing;
+      }
 
       if (config.github.reviewers?.length) {
         await ctx.github.addReviewers(prNumber, config.github.reviewers);
       }
 
       ctx.logger.info({ ticketKey, prNumber }, "PR created");
+      await ctx.telegram
+        .updateDetail(`PR #${prNumber} created`)
+        .catch(() => undefined);
       return { branchName, prNumber };
     }
 
     return { branchName, prNumber: null };
   },
 };
+
+function classifyPushError(stderr: string, branchName: string): Error {
+  const lower = stderr.toLowerCase();
+  if (lower.includes("already exists") || lower.includes("src refspec")) {
+    return new Error(
+      `BRANCH_ALREADY_EXISTS: branch '${branchName}' already exists on remote.\n${stderr}`,
+    );
+  }
+  if (lower.includes("permission denied") || lower.includes("permission to")) {
+    return new Error(
+      `GIT_AUTH_FAILED: permission denied pushing to remote.\n${stderr}`,
+    );
+  }
+  return new Error(`GIT_PUSH_FAILED: ${stderr}`);
+}
+
+function classifyCreatePrError(err: unknown, branchName: string): Error {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.toLowerCase().includes("already exists")) {
+    return new Error(
+      `PR_ALREADY_OPEN: a pull request already exists for branch '${branchName}'.\n${message}`,
+    );
+  }
+  return new Error(`GITHUB_CREATE_PR_FAILED: ${message}`);
+}
 
 function buildPrBody(ticketKey: string, ticketCtx: string): string {
   return `## ${ticketKey}

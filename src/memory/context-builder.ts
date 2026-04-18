@@ -71,6 +71,7 @@ export function writeReviewFeedback(
       (i) => `- [${i.severity.toUpperCase()}] ${i.message}`,
     ),
   ];
+  fs.mkdirSync(memoryDir, { recursive: true });
   fs.writeFileSync(
     path.join(memoryDir, "review-feedback.md"),
     lines.join("\n"),

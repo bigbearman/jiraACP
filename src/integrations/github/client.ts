@@ -9,6 +9,8 @@ export interface GitHubClient {
     base: string;
     draft?: boolean;
   }): Promise<number>;
+  /** Returns the PR number of the open PR for the given branch, or null if none. */
+  findOpenPR(branchName: string): Promise<number | null>;
   mergePR(
     prNumber: number,
     strategy: "squash" | "merge" | "rebase",
@@ -78,6 +80,21 @@ export function createGitHubClient(
         pull_number: prNumber,
         reviewers,
       });
+    },
+
+    async findOpenPR(branchName) {
+      try {
+        const { data } = await octokit.pulls.list({
+          owner,
+          repo,
+          head: `${owner}:${branchName}`,
+          state: "open",
+          per_page: 1,
+        });
+        return data[0]?.number ?? null;
+      } catch {
+        return null;
+      }
     },
 
     async getPR(prNumber) {

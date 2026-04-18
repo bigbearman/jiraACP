@@ -14,9 +14,23 @@ export interface TelegramNotifier {
   notifyStageCompleted(stage: StageId): Promise<void>;
   notifyStageFailed(stage: StageId, error: string): Promise<void>;
   notifyStageSkipped(stage: StageId): Promise<void>;
+  /** Update detail text shown under the current stage in the progress message */
+  updateDetail(detail: string): Promise<void>;
 }
 
 type StageStatus = "pending" | "running" | "done" | "skipped" | "failed";
+
+const STAGE_NAME: Record<StageId, string> = {
+  fetch: "Fetch Ticket",
+  analyze: "Analyze",
+  clarify: "Clarify",
+  code: "Code",
+  git: "Git / PR",
+  review: "Review",
+  deploy: "Deploy",
+  test: "Test",
+  notify: "Notify",
+};
 
 const STAGE_IDS: StageId[] = [
   "fetch",
@@ -64,6 +78,23 @@ export function createTelegramNotifier(
     STAGE_IDS.map((id) => [id, "pending" as StageStatus]),
   );
   let progressMsgId: number | undefined;
+  let currentDetail: string | undefined;
+  let stageStartedAt: number | undefined;
+  let heartbeatTimer: NodeJS.Timeout | undefined;
+
+  function startHeartbeat(): void {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      upsertProgress().catch(() => undefined);
+    }, 30_000);
+  }
+
+  function stopHeartbeat(): void {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
+  }
 
   // Lazy topic resolution — try forum topic, fall back to configured topicId
   let _topicResolved = false;
@@ -97,9 +128,20 @@ export function createTelegramNotifier(
     }).join(" ");
 
     const current = STAGE_IDS.find((id) => stageStatus[id] === "running");
-    const statusLine = current
-      ? `\nStage: <b>${current}</b> — in progress…`
-      : "";
+
+    let statusLine = "";
+    if (current) {
+      const name = STAGE_NAME[current];
+      let elapsed = "";
+      if (stageStartedAt) {
+        const secs = Math.floor((Date.now() - stageStartedAt) / 1000);
+        const m = Math.floor(secs / 60);
+        const s = secs % 60;
+        elapsed = m > 0 ? ` (${m}m${s}s)` : ` (${s}s)`;
+      }
+      statusLine = `\n⏳ <b>${name}</b>${elapsed}`;
+      if (currentDetail) statusLine += `\n💬 ${currentDetail}`;
+    }
 
     return `🔄 <b>${ticketKey}</b>\n${pills}${statusLine}`;
   }
@@ -162,15 +204,21 @@ export function createTelegramNotifier(
 
     async notifyStageStarted(stage) {
       stageStatus[stage] = "running";
+      stageStartedAt = Date.now();
+      currentDetail = undefined;
       await upsertProgress();
+      startHeartbeat();
     },
 
     async notifyStageCompleted(stage) {
+      stopHeartbeat();
       stageStatus[stage] = "done";
+      currentDetail = undefined;
       await upsertProgress();
     },
 
     async notifyStageFailed(stage, error) {
+      stopHeartbeat();
       stageStatus[stage] = "failed";
       await upsertProgress().catch(() => undefined);
 
@@ -186,7 +234,13 @@ export function createTelegramNotifier(
     },
 
     async notifyStageSkipped(stage) {
+      stopHeartbeat();
       stageStatus[stage] = "skipped";
+      await upsertProgress();
+    },
+
+    async updateDetail(detail) {
+      currentDetail = detail;
       await upsertProgress();
     },
   };

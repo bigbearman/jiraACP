@@ -4,7 +4,7 @@ import type { JiraClient } from "../integrations/jira/client.js";
 import { StateManager, getRunDir, getLockPath, getMemoryDir } from "./state.js";
 import { acquireLock } from "../utils/lock.js";
 import { createLogger } from "../utils/logger.js";
-import { getClient as getJiraClient } from "../integrations/jira/client.js";
+import { getClientFromConfig } from "../integrations/jira/client.js";
 import { createGitHubClient } from "../integrations/github/client.js";
 import { createTelegramNotifier } from "../integrations/telegram/notifier.js";
 import { checkCostLimit } from "./cost-guard.js";
@@ -66,7 +66,7 @@ export async function runPipeline(
     memoryDir,
     dryRun: opts.dryRun ?? false,
     logger,
-    jira: getJiraClient(config.jira.instance) as JiraClient,
+    jira: getClientFromConfig(config.jira) as JiraClient,
     github: createGitHubClient(
       config.github.token,
       config.github.owner,

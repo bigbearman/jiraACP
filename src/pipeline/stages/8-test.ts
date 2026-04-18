@@ -44,6 +44,11 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
           { ticketKey, attempt: attempt + 1 },
           "Running UI tests",
         );
+        await ctx.telegram
+          .updateDetail(
+            `Running UI tests — attempt ${attempt + 1}/${retries + 1}…`,
+          )
+          .catch(() => undefined);
 
         const raw = ctx.dryRun
           ? '{"passed":true,"summary":"dry-run","failures":[]}'
@@ -54,6 +59,7 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
               contextFiles,
               timeoutMs: testConfig.timeoutMs ?? 300_000,
               stallTimeoutMs: 60_000,
+              logger: ctx.logger,
             });
 
         const match = raw.match(/\{[\s\S]*\}/);

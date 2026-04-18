@@ -40,7 +40,15 @@ export function getClient(instance: string): JiraClient {
       `Unknown Jira instance: "${instance}". Available: ${available}`,
     );
   }
+  return getClientFromConfig(config);
+}
 
+/** Create a Jira client directly from config values (no env var lookup). */
+export function getClientFromConfig(config: {
+  url: string;
+  token: string;
+  email: string;
+}): JiraClient {
   return axios.create({
     baseURL: `${config.url}/rest/api/3`,
     headers: {

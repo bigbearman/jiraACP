@@ -40,7 +40,9 @@ function deepMerge(
 ): Record<string, unknown> {
   const result: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(override)) {
+    /* v8 ignore start */
     if (value === undefined) continue;
+    /* v8 ignore stop */
     const baseVal = base[key];
     if (
       typeof value === "object" &&

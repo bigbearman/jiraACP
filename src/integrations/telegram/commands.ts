@@ -85,8 +85,13 @@ async function handleRun(ctx: Context): Promise<void> {
       const { runPipeline } = await import("../../pipeline/orchestrator.js");
       const config = loadConfig(projectName);
       await runPipeline(ticketKey, config);
-    } catch {
-      // errors are sent via notifier inside the pipeline
+    } catch (err) {
+      // Pipeline-internal errors are sent via notifier.
+      // Only catch setup errors (e.g. bad config) that escape the orchestrator.
+      await reply(
+        ctx,
+        `❌ Pipeline failed to start: ${err instanceof Error ? err.message : String(err)}`,
+      ).catch(() => undefined);
     }
   });
 }
@@ -384,33 +389,147 @@ async function handleTicket(ctx: Context): Promise<void> {
 
   try {
     const { client, cfg } = jiraClientFrom(projectName);
-    const { data } = await client.get(`/issue/${ticketKey}`);
+    const { data } = await client.get(`/issue/${ticketKey}`, {
+      params: {
+        fields: [
+          "summary",
+          "status",
+          "priority",
+          "assignee",
+          "description",
+          "fixVersions",
+          cfg.jira.acceptanceCriteriaField ?? "customfield_10016",
+        ].join(","),
+      },
+    });
 
-    function extractText(node: unknown): string {
+    // Parse Atlassian Document Format (ADF) → plain text preserving structure
+    function adfToText(node: unknown, depth = 0): string {
       if (!node) return "";
       if (typeof node === "string") return node;
-      const n = node as { type?: string; text?: string; content?: unknown[] };
-      if (n.type === "text") return n.text ?? "";
-      if (n.content) return n.content.map(extractText).join(" ");
-      return "";
+
+      const n = node as {
+        type?: string;
+        text?: string;
+        content?: unknown[];
+        attrs?: { level?: number; order?: number };
+        marks?: Array<{ type: string }>;
+      };
+
+      switch (n.type) {
+        case "text": {
+          let t = n.text ?? "";
+          if (n.marks?.some((m) => m.type === "strong")) t = `<b>${t}</b>`;
+          if (n.marks?.some((m) => m.type === "em")) t = `<i>${t}</i>`;
+          if (n.marks?.some((m) => m.type === "code")) t = `<code>${t}</code>`;
+          return t;
+        }
+        case "paragraph":
+          return (
+            (n.content?.map((c) => adfToText(c, depth)).join("") ?? "") + "\n"
+          );
+        case "heading": {
+          const level = n.attrs?.level ?? 1;
+          const prefix = level <= 2 ? "▸ " : "  ";
+          return (
+            prefix +
+            (n.content?.map((c) => adfToText(c, depth)).join("") ?? "") +
+            "\n"
+          );
+        }
+        case "bulletList":
+          return n.content?.map((c) => adfToText(c, depth + 1)).join("") ?? "";
+        case "orderedList":
+          return (
+            n.content
+              ?.map((c, i) =>
+                adfToText(c, depth + 1).replace(
+                  /^•/,
+                  `${(n.attrs?.order ?? 1) + i}.`,
+                ),
+              )
+              .join("") ?? ""
+          );
+        case "listItem": {
+          const indent = "  ".repeat(depth - 1);
+          const text =
+            n.content
+              ?.map((c) => adfToText(c, depth))
+              .join("")
+              .trimEnd() ?? "";
+          return `${indent}• ${text}\n`;
+        }
+        case "codeBlock":
+          return (
+            "<code>" +
+            (n.content?.map((c) => adfToText(c, depth)).join("") ?? "") +
+            "</code>\n"
+          );
+        case "blockquote":
+          return (
+            n.content?.map((c) => "  " + adfToText(c, depth)).join("") ?? ""
+          );
+        case "rule":
+          return "─────\n";
+        case "hardBreak":
+          return "\n";
+        case "doc":
+        default:
+          return n.content?.map((c) => adfToText(c, depth)).join("") ?? "";
+      }
     }
 
-    const description = extractText(data.fields.description).slice(0, 400);
-    const ac = extractText(
+    const description = adfToText(data.fields.description).trim();
+    const ac = adfToText(
       data.fields[cfg.jira.acceptanceCriteriaField ?? "customfield_10016"],
-    ).slice(0, 300);
+    ).trim();
 
-    const lines = [
+    // Telegram limit: 4096 chars per message. Build header first, then fit content.
+    const header = [
       `<b>${data.key}</b> — ${data.fields.summary}`,
       `Status: ${data.fields.status.name}`,
       `Priority: ${data.fields.priority?.name ?? "—"}`,
       `Assignee: ${data.fields.assignee?.displayName ?? "Unassigned"}`,
-    ];
+    ].join("\n");
 
-    if (description) lines.push(`\n<b>Description</b>\n${description}`);
-    if (ac) lines.push(`\n<b>Acceptance Criteria</b>\n${ac}`);
+    const LIMIT = 4000;
+    const parts: string[] = [header];
+    let remaining = LIMIT - header.length;
 
-    await reply(ctx, lines.join("\n"));
+    if (description && remaining > 50) {
+      const block = `\n\n<b>Description</b>\n${description}`;
+      if (block.length <= remaining) {
+        parts.push(block);
+        remaining -= block.length;
+      } else {
+        // send full description as separate message(s)
+        parts.push(
+          `\n\n<b>Description</b>\n${description.slice(0, remaining - 20)}…`,
+        );
+        remaining = 0;
+      }
+    }
+
+    if (ac && remaining > 50) {
+      const block = `\n\n<b>Acceptance Criteria</b>\n${ac}`;
+      if (block.length <= remaining) {
+        parts.push(block);
+      } else {
+        parts.push(
+          `\n\n<b>Acceptance Criteria</b>\n${ac.slice(0, remaining - 20)}…`,
+        );
+      }
+    }
+
+    await reply(ctx, parts.join(""));
+
+    // Send overflow as follow-up messages (description > 4000 chars)
+    if (description.length > LIMIT - header.length - 30) {
+      const chunks = description.match(/.{1,3800}/gs) ?? [];
+      for (const chunk of chunks.slice(1)) {
+        await reply(ctx, chunk);
+      }
+    }
   } catch (err) {
     await reply(
       ctx,

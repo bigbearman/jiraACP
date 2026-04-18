@@ -17,6 +17,9 @@ export const deployStage: Stage = {
     if (!deploy?.command) throw new Error("deploy.command not configured");
 
     ctx.logger.info({ ticketKey }, "Deploying to dev server");
+    await ctx.telegram
+      .updateDetail(`Running: <code>${deploy.command}</code>…`)
+      .catch(() => undefined);
 
     if (ctx.dryRun) return { deployed: false, dryRun: true };
 
@@ -34,6 +37,9 @@ export const deployStage: Stage = {
 
     // Health check
     if (deploy.healthCheckUrl) {
+      await ctx.telegram
+        .updateDetail(`Checking health: ${deploy.healthCheckUrl}…`)
+        .catch(() => undefined);
       await healthCheck(
         deploy.healthCheckUrl,
         deploy.healthCheckTimeoutMs ?? 30_000,

@@ -46,6 +46,11 @@ export const clarifyStage: Stage = {
       { ticketKey, questions },
       "Requesting clarification via Telegram",
     );
+    await ctx.telegram
+      .updateDetail(
+        `⏳ Waiting for answers to ${questions.length} question(s) via Telegram…`,
+      )
+      .catch(() => undefined);
 
     const hil = config.telegram.humanInTheLoop;
     const answers = await requestClarification(
