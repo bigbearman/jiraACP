@@ -91,6 +91,8 @@ function makeCtx(
       findOpenPR: vi.fn().mockResolvedValue(null),
       addReviewers: vi.fn().mockResolvedValue(undefined),
       mergePR: vi.fn(),
+      getCheckRuns: vi.fn().mockResolvedValue([]),
+      getCheckRunLog: vi.fn().mockResolvedValue(""),
       ...githubOverrides,
     } as unknown as PipelineContext["github"],
     telegram: {

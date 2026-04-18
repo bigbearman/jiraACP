@@ -137,6 +137,8 @@ function makeCtx(overrides: Partial<PipelineContext> = {}): PipelineContext {
       createPR: vi.fn().mockResolvedValue(42),
       addReviewers: vi.fn().mockResolvedValue(undefined),
       mergePR: vi.fn().mockResolvedValue(undefined),
+      getCheckRuns: vi.fn().mockResolvedValue([]),
+      getCheckRunLog: vi.fn().mockResolvedValue(""),
     } as unknown as PipelineContext["github"],
     telegram: {
       send: vi.fn(),

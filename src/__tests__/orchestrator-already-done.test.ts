@@ -59,6 +59,8 @@ const mockGithub = {
   findOpenPR: vi.fn().mockResolvedValue(null),
   addReviewers: vi.fn().mockResolvedValue(undefined),
   mergePR: vi.fn().mockResolvedValue(undefined),
+  getCheckRuns: vi.fn().mockResolvedValue([]),
+  getCheckRunLog: vi.fn().mockResolvedValue(""),
 };
 
 const mockTelegram = {

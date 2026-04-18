@@ -104,13 +104,13 @@ export const gitStage: Stage = {
         });
         const sha = shaResult.stdout.trim();
 
-        const backoff = config.github.ciPollBackoff;
+        const backoff = config.github.ciPollBackoff ?? {};
         const pollConfig: CIPollConfig = {
-          timeoutMs: config.github.ciTimeoutMs,
-          initialMs: backoff.initialMs,
-          multiplier: backoff.multiplier,
-          maxMs: backoff.maxMs,
-          requiredChecks: config.github.requiredChecks,
+          timeoutMs: config.github.ciTimeoutMs ?? 1_800_000,
+          initialMs: backoff.initialMs ?? 5_000,
+          multiplier: backoff.multiplier ?? 2,
+          maxMs: backoff.maxMs ?? 60_000,
+          requiredChecks: config.github.requiredChecks ?? [],
         };
 
         state.emit({
