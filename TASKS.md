@@ -451,3 +451,628 @@ All tasks follow established patterns: `StateManager` from `src/pipeline/state.t
 - No `console.log` in production paths — pino logger only
 - All subprocess calls use `spawnSafe` (never `exec`)
 - New commands registered in `src/cli.ts` with `--project` option following existing pattern
+
+---
+
+## Sprint 4 — Gap Fills & Hardening (2026-04-18)
+
+All tasks follow established patterns: `StateManager` from `src/pipeline/state.ts`,
+`spawnSafe` from `src/utils/process.ts`, `createLogger` from `src/utils/logger.ts`,
+config schema via Zod in `src/config/schema.ts` (new fields use `.default()` or `.optional()`).
+No `any`, explicit return types, `.js` ESM imports.
+
+---
+
+## Wave 1 — Independent XS tasks (no inter-task deps)
+
+### TASK-013 — Memory file mutex for concurrent review agents
+
+- [ ] Status: pending
+- File: `src/utils/file-lock.ts` (new), `src/memory/context-builder.ts` (add `writeReviewAgentOutput`, `mergeReviewOutputs`), `src/pipeline/stages/6-review.ts` (isolated agent outputs + merge step)
+- Scope:
+  - Create `src/utils/file-lock.ts` with generic file-level lock using `O_EXCL` pattern (mirrors `src/utils/lock.ts`):
+    ```typescript
+    export class FileLockTimeout extends Error {
+      constructor(public readonly filePath: string) {
+        super(`File lock timeout: ${filePath}`)
+        this.name = 'FileLockTimeout'
+      }
+    }
+
+    export async function withFileLock<T>(
+      filePath: string,
+      fn: () => Promise<T>,
+      timeout?: number,
+    ): Promise<T>
+    ```
+    - Lock file: `${filePath}.lock` created via `fs.writeFileSync(lockPath, ..., { flag: 'wx' })` (O_EXCL)
+    - Default timeout: 10_000ms; poll every 200ms with `setTimeout` loop
+    - On timeout: throw `FileLockTimeout`
+    - Stale lock detection: if lock file exists and `mtime` > 60s ago, remove it and retry
+    - Always release in `finally` block via `fs.unlinkSync(lockPath)` wrapped in try/catch
+  - Modify `src/memory/context-builder.ts` — add two new exports:
+    ```typescript
+    export function writeReviewAgentOutput(
+      memoryDir: string,
+      agentId: 'logic' | 'quality',
+      raw: string,
+    ): void
+    ```
+    - Writes to `memory/review-logic.md` or `memory/review-quality.md` (isolated, no race)
+    ```typescript
+    export function mergeReviewOutputs(memoryDir: string): string
+    ```
+    - Reads both agent files, concatenates into `review-feedback.md`
+    - Called sequentially after both agents complete
+  - Modify `src/pipeline/stages/6-review.ts`:
+    - After `runAgentsParallel()` returns `[logicRaw, qualityRaw]`:
+      call `writeReviewAgentOutput(memoryDir, 'logic', logicRaw)` and
+      `writeReviewAgentOutput(memoryDir, 'quality', qualityRaw)` (isolated files, no contention)
+    - Then call `mergeReviewOutputs(memoryDir)` sequentially before parsing issues
+    - Existing `writeReviewFeedback()` call remains unchanged (writes the final merged result)
+  - The `withFileLock` utility is generic — available for any future parallel writes outside review
+- Deps: none
+- Acceptance:
+  ```
+  # Run a pipeline with review stage — two agents write in parallel:
+  jiraACP run PROJ-123 --project my-saas
+  # ~/.jira-acp/runs/my-saas/PROJ-123/memory/ contains:
+  #   review-logic.md      (agent 1 raw output)
+  #   review-quality.md    (agent 2 raw output)
+  #   review-feedback.md   (merged, structured result)
+  # No file corruption even under concurrent writes
+
+  # withFileLock timeout test:
+  # Acquire lock on a file, attempt second lock → throws FileLockTimeout after 10s
+  # Stale lock (> 60s mtime) → auto-removed on next acquire attempt
+  ```
+
+---
+
+### TASK-014 — Analyze stage fallback on JSON parse failure
+
+- [ ] Status: pending
+- File: `src/pipeline/stages/2-analyze.ts` (retry + fallback logic), `src/pipeline/state.ts` (add `ANALYZE_PARSE_FALLBACK` event type), `src/config/schema.ts` (add `analyzeFallbackScore` field)
+- Scope:
+  - Add `ANALYZE_PARSE_FALLBACK` to the `PipelineEvent` union in `src/pipeline/state.ts`:
+    ```typescript
+    | { type: 'ANALYZE_PARSE_FALLBACK'; rawSnippet: string; timestamp: string }
+    ```
+    - Also update `applyEvent()` — default case already returns state unchanged, so no functional change needed
+  - Add `analyzeFallbackScore` to `pipeline` section in `src/config/schema.ts`:
+    ```typescript
+    analyzeFallbackScore: z.number().min(0).max(1).default(0.5),
+    ```
+  - Rewrite JSON extraction in `src/pipeline/stages/2-analyze.ts`:
+    1. First attempt: current `raw.match(/\{[\s\S]*\}/)` + `JSON.parse`
+    2. If parse fails → retry agent call with explicit format instruction appended:
+       ```
+       IMPORTANT: Return ONLY valid JSON: {"score": 0.7, "missing": [...], "questions": [...]}
+       ```
+    3. If retry parse also fails → attempt regex score extraction:
+       `const scoreMatch = raw.match(/"score"\s*:\s*([\d.]+)/)`
+       - If found: use extracted score with `missing: [], questions: []`
+    4. If all extraction fails → emit `ANALYZE_PARSE_FALLBACK` event via `ctx.state.emit(...)` with
+       `rawSnippet: raw.slice(0, 500)`
+    5. Send Telegram warning: `await ctx.telegram.send('...')` with fallback notification
+    6. Return `{ score: fallbackScore, missing: [], questions: [], needsClarification: fallbackScore < threshold }`
+       where `fallbackScore = config.pipeline.analyzeFallbackScore ?? 0.5`
+  - The existing happy path (first parse succeeds) is unchanged — no performance impact
+  - Key change: default score shifts from `0` (always triggers clarify) to `0.5` (configurable)
+- Deps: none
+- Acceptance:
+  ```
+  # Happy path — valid JSON on first try:
+  # No retry, no fallback, no event. Score used as-is.
+
+  # First parse fails, retry succeeds:
+  # Uses retry result. No ANALYZE_PARSE_FALLBACK event.
+
+  # Both parses fail, regex extracts score:
+  # Uses extracted score. No ANALYZE_PARSE_FALLBACK event.
+
+  # All extraction fails:
+  jiraACP run PROJ-123 --project my-saas
+  # state.json contains ANALYZE_PARSE_FALLBACK event with rawSnippet
+  # Telegram receives warning message about parse fallback
+  # Pipeline continues with score 0.5 (default)
+  # If clarityThreshold is 0.7 → clarify stage triggers (0.5 < 0.7)
+  # If clarityThreshold is 0.4 → clarify stage skips (0.5 >= 0.4)
+
+  # Custom fallback score:
+  # config: { "pipeline": { "analyzeFallbackScore": 0.8 } }
+  # On double failure → score 0.8, likely skips clarify
+  ```
+
+---
+
+### TASK-015 — Review approval reminder pings
+
+- [ ] Status: pending
+- File: `src/integrations/telegram/human-loop.ts` (add reminder loop in `requestApproval`), `src/config/schema.ts` (add `reminderInterval`, `maxReminders` fields), `src/pipeline/state.ts` (add `APPROVAL_REMINDER_SENT` event type)
+- Scope:
+  - Add `APPROVAL_REMINDER_SENT` to the `PipelineEvent` union in `src/pipeline/state.ts`:
+    ```typescript
+    | { type: 'APPROVAL_REMINDER_SENT'; count: number; timestamp: string }
+    ```
+  - Add fields to `telegram.humanInTheLoop` section in `src/config/schema.ts`:
+    ```typescript
+    reminderIntervalMs: z.number().default(1_800_000),  // 30min
+    maxReminders: z.number().default(3),
+    ```
+  - Modify `requestApproval()` in `src/integrations/telegram/human-loop.ts`:
+    - Accept two new optional fields in the `opts` parameter:
+      ```typescript
+      opts: {
+        timeoutMs: number;
+        onTimeout: ApprovalTimeoutAction;
+        topicId?: number;
+        reminderIntervalMs?: number;  // NEW
+        maxReminders?: number;         // NEW
+      }
+      ```
+    - Replace the single `setTimeout` timeout with a `setInterval`-based reminder loop:
+      ```typescript
+      const interval = opts.reminderIntervalMs ?? 1_800_000
+      const maxR = opts.maxReminders ?? 3
+      let reminderCount = 0
+
+      const reminderTimer = setInterval(async () => {
+        if (!pendingApprovals.has(ticketKey)) {
+          clearInterval(reminderTimer)
+          return
+        }
+        reminderCount++
+        if (reminderCount > maxR) {
+          clearInterval(reminderTimer)
+          return
+        }
+
+        const elapsed = Date.now() - Date.parse(entry.createdAt)
+        const remaining = opts.timeoutMs - elapsed
+        const elapsedStr = formatDuration(elapsed)
+        const remainingStr = formatDuration(remaining)
+
+        const reminderText = [
+          `🔔 Reminder (${reminderCount}/${maxR}): <b>${ticketKey}</b> review approval pending`,
+          '',
+          `${issues.filter(i => i.severity === 'major').length} major issues found — waiting for your decision.`,
+          `⏱️ Elapsed: ${elapsedStr} — auto-${opts.onTimeout} in ${remainingStr}`,
+        ].join('\n')
+
+        await bot.api.sendMessage(chatId, reminderText, {
+          parse_mode: 'HTML',
+          reply_markup: { inline_keyboard: [[ /* same approve/reject buttons */ ]] },
+          ...threadOpts,
+        }).catch(() => undefined)  // swallow Telegram rate-limit errors
+      }, interval)
+      ```
+    - Clear `reminderTimer` when approval/rejection resolves (in the callback handler and timeout handler)
+    - Add unexported helper:
+      ```typescript
+      function formatDuration(ms: number): string {
+        const mins = Math.floor(ms / 60_000)
+        const hours = Math.floor(mins / 60)
+        const remainMins = mins % 60
+        return hours > 0 ? `${hours}h ${remainMins}m` : `${mins}m`
+      }
+      ```
+  - Modify call site in `src/pipeline/stages/6-review.ts`:
+    - Pass `reminderIntervalMs` and `maxReminders` from `config.telegram.humanInTheLoop` to `requestApproval()`:
+      ```typescript
+      await requestApproval(
+        config.telegram.botToken,
+        config.telegram.chatId,
+        ticketKey,
+        issues,
+        {
+          timeoutMs: hil?.reviewApprovalTimeoutMs ?? 86_400_000,
+          onTimeout: hil?.reviewApprovalTimeoutAction ?? 'abort',
+          topicId: config.telegram.topicId,
+          reminderIntervalMs: hil?.reminderIntervalMs,
+          maxReminders: hil?.maxReminders,
+        },
+      )
+      ```
+  - Note: `APPROVAL_REMINDER_SENT` event emission requires `StateManager` access — since `requestApproval` is in the integration layer (no access to `StateManager`), the event emission is done in `6-review.ts` by wrapping `requestApproval` or by returning reminder count. Alternative: pass an `onReminder` callback to `requestApproval` that the stage uses to emit the event.
+    ```typescript
+    // In requestApproval opts:
+    onReminder?: (count: number) => void
+
+    // In 6-review.ts call:
+    onReminder: (count) => ctx.state.emit({ type: 'APPROVAL_REMINDER_SENT', count }),
+    ```
+- Deps: none
+- Acceptance:
+  ```json
+  {
+    "telegram": {
+      "humanInTheLoop": {
+        "reviewApprovalTimeoutMs": 3600000,
+        "reminderIntervalMs": 900000,
+        "maxReminders": 2
+      }
+    }
+  }
+  ```
+  ```
+  jiraACP run PROJ-123 --project my-saas
+  # Review finds major issues → approval request sent
+  # After 15min: reminder 1/2 sent with elapsed time + countdown
+  # After 30min: reminder 2/2 sent
+  # After 60min: timeout → abort (or merge-anyway per config)
+  # state.json has APPROVAL_REMINDER_SENT events with count 1, 2
+
+  # User approves at 10min → no reminders sent, timer cleared
+  # maxReminders: 0 → no reminders ever sent, timeout action applies directly
+  # reminderIntervalMs > reviewApprovalTimeoutMs → no reminders (interval never fires)
+  ```
+
+---
+
+## Wave 2 — Features requiring stage integration (may depend on Wave 1 or existing code)
+
+### TASK-011 — Auto-rollback on deploy/test failure
+
+- [ ] Status: pending
+- File: `src/pipeline/rollback.ts` (new), `src/pipeline/stages/7-deploy.ts` (call rollback on health-check failure), `src/pipeline/stages/8-test.ts` (call rollback on test failure), `src/pipeline/state.ts` (add `DEPLOY_ROLLED_BACK` event type), `src/config/schema.ts` (add `rollbackTimeoutMs` field), `src/integrations/telegram/notifier.ts` (add `notifyRollback` method)
+- Scope:
+  - Add `DEPLOY_ROLLED_BACK` to the `PipelineEvent` union in `src/pipeline/state.ts`:
+    ```typescript
+    | {
+        type: 'DEPLOY_ROLLED_BACK';
+        trigger: 'deploy' | 'test';
+        success: boolean;
+        durationMs: number;
+        timestamp: string;
+      }
+    ```
+    - Update `applyEvent()`: no state mutation needed (informational event), default case handles it
+  - Add `rollbackTimeoutMs` to `deploy` section in `src/config/schema.ts`:
+    ```typescript
+    rollbackTimeoutMs: z.number().default(60_000),
+    ```
+    - `rollbackCommand` already exists in schema as `z.string().optional()` — no change needed
+  - Create `src/pipeline/rollback.ts`:
+    ```typescript
+    import { spawnSafe, buildMinimalEnv } from '../utils/process.js'
+    import type { ProjectConfig } from '../config/schema.js'
+    import type { Logger } from 'pino'
+
+    export interface RollbackResult {
+      success: boolean
+      stdout: string
+      stderr: string
+      durationMs: number
+    }
+
+    export async function executeRollback(
+      config: ProjectConfig,
+      context: {
+        ticketKey: string
+        branchName: string | null
+        prUrl: string | null
+        logger: Logger
+      },
+    ): Promise<RollbackResult>
+    ```
+    - If `config.deploy.rollbackCommand` is undefined or empty: throw `Error('No rollbackCommand configured')`
+    - Execute via `spawnSafe(config.deploy.rollbackCommand, [], { ... })`:
+      - `cwd`: `config.workspace.rootDir`
+      - `env`: `buildMinimalEnv({ ...config.deploy.env, JIRA_ACP_TICKET: context.ticketKey, BRANCH: context.branchName ?? '', PR_URL: context.prUrl ?? '' })`
+      - `timeoutMs`: `config.deploy.rollbackTimeoutMs ?? 60_000`
+    - Return `{ success: result.exitCode === 0, stdout: result.stdout, stderr: result.stderr, durationMs }`
+    - Log rollback start (`info`) and result (`info` on success, `error` on failure) via `context.logger`
+  - Add `notifyRollback` to `TelegramNotifier` interface and implementation in `src/integrations/telegram/notifier.ts`:
+    ```typescript
+    notifyRollback(ticketKey: string, opts: {
+      trigger: 'deploy' | 'test';
+      success: boolean;
+      error: string;
+    }): Promise<void>
+    ```
+    - On rollback success: send `"⚠️ <b>${ticketKey}</b> — Deploy failed, rolled back ✓\nTrigger: ${trigger}\nError: ${error}"`
+    - On rollback failure: send `"🚨 <b>${ticketKey}</b> — Deploy failed, rollback ALSO failed ⚠️\nTrigger: ${trigger}\nError: ${error}"`
+  - Modify `src/pipeline/stages/7-deploy.ts`:
+    - Import `executeRollback` from `../rollback.js`
+    - In the deploy failure path (after health check fails), before throwing:
+      ```typescript
+      if (config.deploy.rollbackCommand) {
+        const rollbackResult = await executeRollback(config, {
+          ticketKey,
+          branchName: ctx.state.current.branchName,
+          prUrl: null,
+          logger: ctx.logger,
+        })
+        ctx.state.emit({
+          type: 'DEPLOY_ROLLED_BACK',
+          trigger: 'deploy',
+          success: rollbackResult.success,
+          durationMs: rollbackResult.durationMs,
+        })
+        await ctx.telegram.notifyRollback(ticketKey, {
+          trigger: 'deploy',
+          success: rollbackResult.success,
+          error: deployError.message,
+        })
+      }
+      ```
+    - Wrap `executeRollback` call in try/catch — if rollback itself throws (e.g. timeout), log error and emit `DEPLOY_ROLLED_BACK` with `success: false`
+    - In dry-run mode: log `"Would execute rollback: ${config.deploy.rollbackCommand}"` but do not run
+  - Modify `src/pipeline/stages/8-test.ts`:
+    - Same pattern as stage 7: on final test failure (after all retries), if `config.pipeline.failOnTestFailure` is true and `config.deploy.rollbackCommand` is configured:
+      ```typescript
+      if (failOnTest && config.deploy.rollbackCommand) {
+        // Same rollback logic as stage 7
+      }
+      ```
+    - Trigger field: `'test'` instead of `'deploy'`
+- Deps: none (rollbackCommand already in schema; executeRollback is self-contained)
+- Acceptance:
+  ```json
+  {
+    "deploy": {
+      "enabled": true,
+      "command": "deploy.sh",
+      "rollbackCommand": "rollback.sh",
+      "healthCheckUrl": "https://staging.example.com/health",
+      "rollbackTimeoutMs": 30000
+    }
+  }
+  ```
+  ```
+  # Health check fails after deploy:
+  jiraACP run PROJ-123 --project my-saas
+  # rollback.sh executed with JIRA_ACP_TICKET=PROJ-123 in env
+  # state.json has DEPLOY_ROLLED_BACK { trigger: "deploy", success: true, durationMs: 1234 }
+  # Telegram: "Deploy failed, rolled back ✓"
+  # Pipeline aborts after rollback
+
+  # Test failure with rollback:
+  # stage 8 fails → rollback.sh executed → DEPLOY_ROLLED_BACK { trigger: "test" }
+
+  # No rollbackCommand configured:
+  # Deploy fails → abort as before, no rollback attempted
+
+  # Rollback itself fails (exit 1 or timeout):
+  # DEPLOY_ROLLED_BACK { success: false }
+  # Telegram: "Deploy failed, rollback ALSO failed ⚠️"
+
+  # Dry-run:
+  jiraACP run PROJ-123 --project my-saas --dry-run
+  # Logs "Would execute rollback" — does NOT run rollback.sh
+  ```
+
+---
+
+### TASK-012 — CI status polling with exponential backoff
+
+- [ ] Status: pending
+- File: `src/pipeline/ci-poller.ts` (new), `src/integrations/github/client.ts` (add `getCheckRuns`, `getCheckRunLog` methods), `src/pipeline/stages/5-git.ts` (call `waitForCI` after PR creation), `src/config/schema.ts` (add `waitForCI`, `ciTimeoutMs`, `ciPollBackoff`, `requiredChecks` fields), `src/pipeline/state.ts` (add `CI_POLLING_STARTED`, `CI_COMPLETED`, `CI_TIMEOUT` event types), `src/memory/context-builder.ts` (add `writeCIStatus` export)
+- Scope:
+  - Add CI event types to the `PipelineEvent` union in `src/pipeline/state.ts`:
+    ```typescript
+    | { type: 'CI_POLLING_STARTED'; sha: string; requiredChecks: string[]; timeoutMs: number; timestamp: string }
+    | { type: 'CI_COMPLETED'; status: 'success' | 'failure'; passedCount: number; failedCount: number; durationMs: number; timestamp: string }
+    | { type: 'CI_TIMEOUT'; elapsedMs: number; pendingChecks: string[]; timestamp: string }
+    ```
+  - Add CI config fields to `github` section in `src/config/schema.ts`:
+    ```typescript
+    waitForCI: z.boolean().default(true),
+    ciTimeoutMs: z.number().default(1_800_000),  // 30min
+    ciPollBackoff: z.object({
+      initialMs: z.number().default(5_000),
+      multiplier: z.number().default(2),
+      maxMs: z.number().default(60_000),
+    }).default({}),
+    requiredChecks: z.array(z.string()).default([]),
+    ```
+  - Add methods to `GitHubClient` interface and implementation in `src/integrations/github/client.ts`:
+    ```typescript
+    // Interface additions:
+    getCheckRuns(sha: string): Promise<CheckRun[]>
+    getCheckRunLog(checkRunId: number): Promise<string>
+
+    // Types:
+    export interface CheckRun {
+      id: number
+      name: string
+      status: 'completed' | 'in_progress' | 'queued'
+      conclusion: 'success' | 'failure' | 'neutral' | 'skipped' | null
+      startedAt: string | null
+      completedAt: string | null
+    }
+    ```
+    - `getCheckRuns`: uses `octokit.checks.listForRef({ owner, repo, ref: sha })`
+    - `getCheckRunLog`: uses `octokit.checks.get({ owner, repo, check_run_id })` and returns
+      `data.output?.text ?? data.output?.summary ?? ''` truncated to 2000 chars
+  - Create `src/pipeline/ci-poller.ts`:
+    ```typescript
+    import type { GitHubClient, CheckRun } from '../integrations/github/client.js'
+    import type { Logger } from 'pino'
+
+    export interface CIResult {
+      status: 'success' | 'failure' | 'timeout'
+      checks: Array<{
+        name: string
+        status: 'completed' | 'in_progress' | 'queued'
+        conclusion: 'success' | 'failure' | 'neutral' | 'skipped' | null
+        durationMs: number
+      }>
+      failedLogs: string[]
+      totalDurationMs: number
+    }
+
+    export interface CIPollConfig {
+      timeoutMs: number
+      backoff: { initialMs: number; multiplier: number; maxMs: number }
+      requiredChecks: string[]
+    }
+
+    export async function waitForCI(
+      github: GitHubClient,
+      sha: string,
+      config: CIPollConfig,
+      logger: Logger,
+    ): Promise<CIResult>
+    ```
+    - Polling loop with exponential backoff:
+      ```typescript
+      let delay = config.backoff.initialMs   // 5000
+      let elapsed = 0
+      const start = Date.now()
+
+      while (elapsed < config.timeoutMs) {
+        const allChecks = await github.getCheckRuns(sha)
+        let checks = allChecks
+        if (config.requiredChecks.length > 0) {
+          checks = allChecks.filter(c => config.requiredChecks.includes(c.name))
+          // Warn about missing required checks
+          const found = new Set(checks.map(c => c.name))
+          for (const req of config.requiredChecks) {
+            if (!found.has(req)) logger.warn({ check: req }, 'Required CI check not found')
+          }
+        }
+
+        if (checks.length === 0) {
+          // No checks configured on repo → treat as success
+          return { status: 'success', checks: [], failedLogs: [], totalDurationMs: Date.now() - start }
+        }
+
+        const allCompleted = checks.every(c => c.status === 'completed')
+        if (allCompleted) {
+          const failed = checks.filter(c => c.conclusion === 'failure')
+          const failedLogs: string[] = []
+          for (const f of failed.slice(0, 3)) {
+            const log = await github.getCheckRunLog(f.id).catch(() => '')
+            if (log) failedLogs.push(`${f.name}:\n${log.slice(0, 2000)}`)
+          }
+          return {
+            status: failed.length > 0 ? 'failure' : 'success',
+            checks: checks.map(c => ({ ... })),
+            failedLogs,
+            totalDurationMs: Date.now() - start,
+          }
+        }
+
+        await sleep(delay)
+        elapsed = Date.now() - start
+        delay = Math.min(delay * config.backoff.multiplier, config.backoff.maxMs)
+        logger.debug({ elapsed, nextDelay: delay, pending: checks.filter(c => c.status !== 'completed').length }, 'CI polling')
+      }
+
+      // Timeout
+      const pending = checks.filter(c => c.status !== 'completed').map(c => c.name)
+      return { status: 'timeout', checks: [...], failedLogs: [], totalDurationMs: Date.now() - start }
+      ```
+  - Add `writeCIStatus` to `src/memory/context-builder.ts`:
+    ```typescript
+    export function writeCIStatus(memoryDir: string, result: CIResult): void
+    ```
+    - Writes `memory/ci-status.md` with CI status summary and failed check logs
+    - This file is included in `getContextFilesForStage()` for `review` stage
+  - Update `getContextFilesForStage()` in `src/memory/context-builder.ts`:
+    - For `stage === 'review'`: also include `ci-status.md` if it exists
+  - Modify `src/pipeline/stages/5-git.ts`:
+    - After PR creation (after `return { branchName, prNumber }` in the non-dry-run path), insert CI polling:
+      ```typescript
+      // After PR created and reviewers added:
+      if (config.github.waitForCI !== false) {
+        const headSha = await getHeadSha(workdir)  // git rev-parse HEAD
+        ctx.state.emit({
+          type: 'CI_POLLING_STARTED',
+          sha: headSha,
+          requiredChecks: config.github.requiredChecks ?? [],
+          timeoutMs: config.github.ciTimeoutMs ?? 1_800_000,
+        })
+        await ctx.telegram.updateDetail('Waiting for CI checks…').catch(() => undefined)
+
+        const ciResult = await waitForCI(ctx.github, headSha, {
+          timeoutMs: config.github.ciTimeoutMs ?? 1_800_000,
+          backoff: config.github.ciPollBackoff ?? { initialMs: 5000, multiplier: 2, maxMs: 60000 },
+          requiredChecks: config.github.requiredChecks ?? [],
+        }, ctx.logger)
+
+        if (ciResult.status === 'timeout') {
+          ctx.state.emit({
+            type: 'CI_TIMEOUT',
+            elapsedMs: ciResult.totalDurationMs,
+            pendingChecks: ciResult.checks.filter(c => c.status !== 'completed').map(c => c.name),
+          })
+          ctx.logger.warn({ ticketKey }, 'CI timed out — proceeding to review')
+        } else {
+          ctx.state.emit({
+            type: 'CI_COMPLETED',
+            status: ciResult.status,
+            passedCount: ciResult.checks.filter(c => c.conclusion === 'success').length,
+            failedCount: ciResult.checks.filter(c => c.conclusion === 'failure').length,
+            durationMs: ciResult.totalDurationMs,
+          })
+        }
+
+        writeCIStatus(ctx.memoryDir, ciResult)
+        await ctx.telegram.updateDetail(`CI: ${ciResult.status}`).catch(() => undefined)
+      }
+
+      return { branchName, prNumber }
+      ```
+    - Add unexported helper:
+      ```typescript
+      async function getHeadSha(workdir: string): Promise<string> {
+        const result = await spawnSafe('git', ['rev-parse', 'HEAD'], { cwd: workdir })
+        return result.stdout.trim()
+      }
+      ```
+    - In dry-run mode: log `"Would wait for CI"` but skip polling
+  - CI timeout does NOT abort the pipeline — it proceeds to review with "CI timed out" in context
+  - CI failure does NOT abort — review agents receive failure logs to focus their review
+- Deps: none (builds on existing `GitHubClient`, `spawnSafe`, `StateManager`)
+- Acceptance:
+  ```json
+  {
+    "github": {
+      "waitForCI": true,
+      "ciTimeoutMs": 1800000,
+      "ciPollBackoff": { "initialMs": 5000, "multiplier": 2, "maxMs": 60000 },
+      "requiredChecks": ["lint", "test", "build"]
+    }
+  }
+  ```
+  ```
+  jiraACP run PROJ-123 --project my-saas
+  # After PR creation: polls CI with backoff 5s → 10s → 20s → 40s → 60s → 60s (capped)
+  # state.json: CI_POLLING_STARTED { sha, requiredChecks: ["lint","test","build"] }
+  # All checks pass → CI_COMPLETED { status: "success", passedCount: 3, failedCount: 0 }
+  # memory/ci-status.md written for review context
+
+  # CI failure:
+  # CI_COMPLETED { status: "failure", failedCount: 1 }
+  # ci-status.md includes failure logs (max 2000 chars per check)
+  # Review stage receives CI failure context → agents focus on broken area
+
+  # CI timeout (30min):
+  # CI_TIMEOUT { elapsedMs: 1800000, pendingChecks: ["test"] }
+  # ci-status.md includes "CI timed out" note
+  # Pipeline proceeds to review anyway
+
+  # waitForCI: false → no polling, skips entirely
+  # No CI checks on repo → immediate success, no polling
+  # requiredChecks has non-existent check → warning logged, waits for existing checks only
+
+  # Dry-run:
+  jiraACP run PROJ-123 --project my-saas --dry-run
+  # Logs "Would wait for CI" — does NOT poll
+  ```
+
+---
+
+## Definition of Done (Sprint 4)
+
+- `npm run build` exits 0 with zero TypeScript errors
+- No `any` — use `unknown` + type guard where dynamic types are needed
+- All new exports have explicit return types
+- All imports use `.js` extension (ESM)
+- No `console.log` in production paths — pino logger only
+- All subprocess calls use `spawnSafe` (never `exec`)
+- New config fields use `.default()` or `.optional()` — backward compatible with existing configs
+- New event types added to `PipelineEvent` union without breaking `applyEvent()` default case

@@ -149,7 +149,7 @@ jiraACP config edit
 
 ### Utility
 ```
-jiraACP serve [--port 3100]           Webhook server for external triggers
+jiraACP serve [--port 3110]           Webhook server for external triggers
 ```
 
 ### Exit Codes
@@ -394,3 +394,208 @@ Resume logic: replay event log → compute current stage → restart from last i
 - Clarification rate: < 20% of tickets need human input
 - Pipeline resume success: 100% of crashed runs resumable
 - Zero plaintext secrets in any generated file
+
+---
+
+## 12. Sprint 4–7 Features — Added 2026-04-18
+
+### 12.1 Auto-Rollback on Deploy/Test Failure (Sprint 4, Size S)
+
+Wire existing `rollbackCommand` config into failure paths of stage 7 (Deploy) and stage 8 (Test). On failure: execute rollback via `spawnSafe()`, emit `DEPLOY_ROLLED_BACK` event, send Telegram alert. Add `rollbackTimeout` config field (default 60s). If rollback not configured, preserve current abort behavior.
+
+**Acceptance criteria:**
+- [ ] Stage 7 health-check fail → runs `rollbackCommand` if configured
+- [ ] Stage 8 test fail → runs `rollbackCommand` if configured
+- [ ] `DEPLOY_ROLLED_BACK` event logged with trigger + success status
+- [ ] Telegram alert sent with rollback outcome
+- [ ] Dry-run mode logs "would rollback" without executing
+- [ ] Rollback timeout kills process after `rollbackTimeout` ms
+
+**Files:** `src/pipeline/rollback.ts` (new), `7-deploy.ts`, `8-test.ts`, `state.ts`, `schema.ts`, `notifier.ts`
+**Spec:** `docs/specs/01-auto-rollback.md`
+
+### 12.2 CI Status Polling with Exponential Backoff (Sprint 4, Size S)
+
+After PR creation in stage 5, poll GitHub CI status with exponential backoff (5s→10s→30s→60s, max 30min). Pass CI result to stage 6 as review context. Add config fields: `waitForCI`, `ciTimeout`, `ciPollBackoff`, `requiredChecks`.
+
+**Acceptance criteria:**
+- [ ] Polls CI with exponential backoff (5s initial, 2x multiplier, 60s max)
+- [ ] Returns "success"/"failure"/"timeout" with check details
+- [ ] CI failure logs included in review context (`memory/ci-status.md`)
+- [ ] `waitForCI: false` skips polling entirely
+- [ ] Empty check list → immediate success
+- [ ] `requiredChecks` filters to specific check names only
+- [ ] Configurable `ciTimeout` (default 30min)
+
+**Files:** `src/pipeline/ci-poller.ts` (new), `5-git.ts`, `github/client.ts`, `schema.ts`, `state.ts`
+**Spec:** `docs/specs/02-ci-polling-backoff.md`
+
+### 12.3 Memory File Mutex for Concurrent Agents (Sprint 4, Size XS)
+
+Fix race condition in stage 6 (Review) where 2 parallel agents write to same context files. Solution: give each review agent an isolated output file (`review-logic.md`, `review-quality.md`), merge post-completion into `review-feedback.md`. Add generic `withFileLock()` utility for future parallel writes.
+
+**Acceptance criteria:**
+- [ ] Review agent 1 writes to `review-logic.md`, agent 2 to `review-quality.md`
+- [ ] `review-feedback.md` merged correctly after both agents complete
+- [ ] `withFileLock()` utility works with O_EXCL pattern
+- [ ] Stale lock files (> 60s) auto-removed
+- [ ] No behavior change for non-parallel stages
+
+**Files:** `src/utils/lock.ts`, `src/memory/context-builder.ts`, `6-review.ts`
+**Spec:** `docs/specs/03-memory-file-mutex.md`
+
+### 12.4 Analyze Stage Fallback Strategy (Sprint 4, Size XS)
+
+When stage 2 (Analyze) agent returns unparseable JSON, retry once with explicit format instructions. If retry fails, default to score 0.5 (not 0) to reduce false-positive clarification triggers. Add `analyzeFallbackScore` config. Emit `ANALYZE_PARSE_FALLBACK` event.
+
+**Acceptance criteria:**
+- [ ] First parse fail → retry with structured output instructions
+- [ ] Retry succeed → use retry result
+- [ ] Both fail → fallback to configurable `analyzeFallbackScore` (default 0.5)
+- [ ] Partial JSON → regex extract `"score": X` before giving up
+- [ ] `ANALYZE_PARSE_FALLBACK` event emitted with raw response snippet
+- [ ] Telegram warning sent on fallback
+
+**Files:** `2-analyze.ts`, `state.ts`, `schema.ts`, `notifier.ts`
+**Spec:** `docs/specs/04-analyze-fallback.md`
+
+### 12.5 Review Approval Reminder (Sprint 4, Size XS)
+
+Periodic Telegram reminder pings while awaiting review approval. First reminder after `reminderInterval` (default 30min), repeat up to `maxReminders` (default 3). After max reminders, follow `approvalTimeoutAction` config.
+
+**Acceptance criteria:**
+- [ ] Reminder sent at configurable interval
+- [ ] No reminder if approved before interval
+- [ ] Max reminders respected, stops after N
+- [ ] `APPROVAL_REMINDER_SENT` event emitted with count
+- [ ] Timer cancelled immediately on approval
+- [ ] Reminder message shows count (e.g., "2/3") and time remaining
+- [ ] `maxReminders: 0` disables reminders
+
+**Files:** `6-review.ts`, `telegram/human-loop.ts`, `schema.ts`, `state.ts`
+**Spec:** `docs/specs/05-review-approval-reminder.md`
+
+### 12.6 Multi-Ticket Dependency DAG (Sprint 5, Size M)
+
+Build dependency DAG from Jira issue links for `sprint --respect-deps`. Topological sort → execute in waves (parallel within wave, sequential between waves). Detect cycles, warn on external deps. New CLI: `jiraACP deps`.
+
+**Acceptance criteria:**
+- [ ] `buildDAG()` computes correct wave order from Jira blockedBy/blocks links
+- [ ] `detectCycles()` identifies and reports circular dependencies
+- [ ] External deps (outside sprint) warned but not blocking
+- [ ] `failFastOnBlockerFailure` skips dependents when blocker fails
+- [ ] Diamond dependency resolved correctly (3 waves)
+- [ ] `jiraACP deps --sprint` renders visual DAG tree
+- [ ] `--respect-deps` not set → current parallel behavior unchanged
+- [ ] New MCP tool: `jira_get_dependencies`
+
+**Files:** `src/pipeline/dag.ts` (new), `src/commands/deps.ts` (new), `sprint.ts`, `jira/client.ts`, `jira/tools.ts`, `cli.ts`, `state.ts`
+**Spec:** `docs/specs/06-ticket-dependency-dag.md`
+
+### 12.7 Learning Loop: Auto-Retry with Feedback (Sprint 5, Size M)
+
+When review rejects or tests fail, auto-feed failure context back to stage 4 (Code) and re-run stages 4→8. Shared retry counter across triggers. Detect identical code → early abort. Configurable `maxRetries` (default 2).
+
+**Acceptance criteria:**
+- [ ] Review reject → retry from stage 4 with review issues as context
+- [ ] Test fail → retry from stage 4 with test output as context
+- [ ] Retry context written to `memory/retry-context.md`
+- [ ] Shared counter across review + test triggers
+- [ ] Identical code detection → early abort
+- [ ] `--no-retry` flag disables for single run
+- [ ] `RETRY_STARTED/SUCCEEDED/EXHAUSTED` events emitted
+- [ ] Cost guard respected during retry
+- [ ] Force-push to same branch, update PR description on retry
+
+**Files:** `src/pipeline/retry.ts` (new), `orchestrator.ts`, `4-code.ts`, `6-review.ts`, `context-builder.ts`, `state.ts`, `notifier.ts`
+**Spec:** `docs/specs/07-learning-loop.md`
+
+### 12.8 Slack Adapter (Sprint 6, Size M)
+
+Extract `NotificationAdapter` interface from Telegram, implement `SlackAdapter` with `@slack/bolt` (Socket Mode). Support `telegram`, `slack`, or `both` via config. Slack Block Kit for approval buttons.
+
+**Acceptance criteria:**
+- [ ] `NotificationAdapter` interface extracted (no Telegram behavior change)
+- [ ] `NotificationRouter` broadcasts to all configured channels
+- [ ] Human-loop uses primary channel only (first in config array)
+- [ ] Slack notifications with Block Kit formatting
+- [ ] Slack approval buttons (approve/reject)
+- [ ] Slack clarification via modal
+- [ ] Thread-per-ticket in Slack
+- [ ] Config migration: existing Telegram config → nested under `notifications.telegram`
+- [ ] `init` wizard supports Slack option
+
+**Files:** `src/integrations/notifications/adapter.ts` (new), `src/integrations/slack/` (new dir), refactor `telegram/notifier.ts`, `telegram/human-loop.ts`, stages 3/6/9, `schema.ts`, `init.ts`
+**Spec:** `docs/specs/08-slack-adapter.md`
+
+### 12.9 Jira Webhook Auto-Trigger (Sprint 6, Size M)
+
+Implement webhook processing in `serve` command. Jira POST → filter by status transition + assignee + project → auto-trigger pipeline. HMAC verification, IP allowlist, per-ticket rate limiting. New CLI: `jiraACP webhook register/list/remove`.
+
+**Acceptance criteria:**
+- [ ] `POST /webhook/jira` processes Jira webhook events
+- [ ] HMAC signature verification (X-Hub-Signature)
+- [ ] IP allowlist fallback for Jira Server
+- [ ] Filter by `triggerOnStatus` (e.g., "Ready for Dev")
+- [ ] Filter by assignee match
+- [ ] Per-ticket rate limiting (configurable cooldown)
+- [ ] Pipeline triggered async, 202 Accepted response
+- [ ] Duplicate pipeline detection → 503
+- [ ] `webhook register` creates Jira webhook via API
+- [ ] Proper HTTP status codes: 400, 401, 404, 429, 503
+
+**Files:** `src/webhook/` (new dir: handler.ts, validator.ts, rate-limiter.ts), `src/commands/webhook.ts` (new), `serve.ts`, `jira/client.ts`, `cli.ts`, `schema.ts`
+**Spec:** `docs/specs/09-webhook-ingest.md`
+
+### 12.10 Web Dashboard (Sprint 6, Size M-L)
+
+Read-only web dashboard served from existing HTTP server (port 3110). Server-rendered HTML (no frontend framework). SSE for real-time updates. Routes: home (active runs), run detail (timeline/logs), costs (charts). JSON API endpoints.
+
+**Acceptance criteria:**
+- [ ] `GET /` renders dashboard home with active + recent runs
+- [ ] `GET /runs/:project/:ticket` renders single run timeline
+- [ ] `GET /costs` renders cost overview per project/month
+- [ ] JSON API: `/api/runs`, `/api/runs/:project/:ticket`, `/api/costs`
+- [ ] SSE: `/api/events` pushes real-time pipeline events
+- [ ] Dark/light theme
+- [ ] Corrupted state files handled gracefully
+- [ ] `dashboard.enabled: false` disables dashboard routes
+
+**Files:** `src/dashboard/` (new dir: router.ts, views/, api.ts, sse.ts, styles.ts, data.ts), `serve.ts`, `schema.ts`
+**Spec:** `docs/specs/10-web-dashboard.md`
+
+### 12.11 Cost Budget Tier with Model Fallback (Sprint 7, Size S)
+
+Replace hard abort at `maxCostUsdPerRun` with tiered response: warn at 70%, downgrade model at 85%, abort at 95%. Downgrade chain: opus→sonnet→haiku. Completed run at lower quality > aborted run.
+
+**Acceptance criteria:**
+- [ ] Warn at `warnThreshold` (default 70%) — Telegram notification
+- [ ] Downgrade at `downgradeThreshold` (default 85%) — use lower model
+- [ ] Abort at `abortThreshold` (default 95%) — last resort
+- [ ] Fallback chain configurable (default opus→sonnet→haiku)
+- [ ] Already-lowest model → abort
+- [ ] `allowDowngrade: false` → direct abort (current behavior)
+- [ ] `COST_WARNING` and `COST_MODEL_DOWNGRADED` events emitted
+- [ ] Telegram receives warn + downgrade messages
+
+**Files:** `cost-guard.ts`, `orchestrator.ts`, `notifier.ts`, `state.ts`, `schema.ts`
+**Spec:** `docs/specs/11-cost-budget-fallback.md`
+
+### 12.12 Plugin System (Sprint 7+, Size L)
+
+TypeScript plugin system (inspired by OpenACP): npm packages with standard entry point, lifecycle hooks, registration API for custom stages/notifiers/middleware. CLI for install/remove/list/create/enable/disable.
+
+**Acceptance criteria:**
+- [ ] `PluginDefinition` interface: setup/teardown lifecycle
+- [ ] `PluginContext`: scoped API for stages, notifiers, middleware, storage, logger
+- [ ] Plugin boot in dependency order (topological sort)
+- [ ] Custom stages insertable at any position in pipeline
+- [ ] Middleware hooks: pipeline:before/after, stage:before/after, agent:before/after, etc.
+- [ ] Per-plugin storage in `~/.jira-acp/plugins/<name>/`
+- [ ] `jiraACP plugin install/remove/list/create/enable/disable` CLI
+- [ ] Plugin setup error → skipped gracefully, pipeline continues
+- [ ] Circular dependency detection
+- [ ] Plugin scaffold template via `plugin create`
+
+**Files:** `src/plugin/` (new dir: loader.ts, context.ts, registry.ts, lifecycle.ts, storage.ts, template/), `src/commands/plugin.ts` (new), `cli.ts`, `orchestrator.ts`, `serve.ts`, `schema.ts`
+**Spec:** `docs/specs/12-plugin-system.md`
