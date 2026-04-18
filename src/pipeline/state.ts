@@ -26,7 +26,14 @@ export type PipelineEvent =
   | { type: "APPROVAL_REMINDER_SENT"; count: number; timestamp: string }
   | { type: "PIPELINE_COMPLETED"; timestamp: string }
   | { type: "PIPELINE_ABORTED"; reason: string; timestamp: string }
-  | { type: "ANALYZE_PARSE_FALLBACK"; rawSnippet: string; timestamp: string };
+  | { type: "ANALYZE_PARSE_FALLBACK"; rawSnippet: string; timestamp: string }
+  | {
+      type: "DEPLOY_ROLLED_BACK";
+      trigger: "deploy" | "test";
+      success: boolean;
+      durationMs: number;
+      timestamp: string;
+    };
 
 // ── Derived state ─────────────────────────────────────────────────────────
 

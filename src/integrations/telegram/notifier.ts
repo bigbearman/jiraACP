@@ -16,6 +16,10 @@ export interface TelegramNotifier {
   notifyStageSkipped(stage: StageId): Promise<void>;
   /** Update detail text shown under the current stage in the progress message */
   updateDetail(detail: string): Promise<void>;
+  notifyRollback(
+    ticketKey: string,
+    opts: { trigger: "deploy" | "test"; success: boolean; error?: string },
+  ): Promise<void>;
 }
 
 type StageStatus = "pending" | "running" | "done" | "skipped" | "failed";
@@ -242,6 +246,17 @@ export function createTelegramNotifier(
     async updateDetail(detail) {
       currentDetail = detail;
       await upsertProgress();
+    },
+
+    async notifyRollback(tk, { trigger, success, error }) {
+      const threadOpts = await makeThreadOpts();
+      const message = success
+        ? `⚠️ <b>${tk}</b> — Deploy failed (${trigger}), rolled back ✓`
+        : `🚨 <b>${tk}</b> — Deploy failed (${trigger}), rollback ALSO failed ⚠️${error ? `\n<code>${error.slice(0, 300)}</code>` : ""}`;
+      await bot.api.sendMessage(chatId, message, {
+        parse_mode: "HTML",
+        ...threadOpts,
+      });
     },
   };
 }

@@ -1,5 +1,6 @@
 import type { Stage, PipelineContext, StageOutput } from "./types.js";
 import { spawnSafe, buildMinimalEnv } from "../../utils/process.js";
+import { executeRollback } from "../rollback.js";
 
 export const deployStage: Stage = {
   id: "deploy",
@@ -21,29 +22,41 @@ export const deployStage: Stage = {
       .updateDetail(`Running: <code>${deploy.command}</code>…`)
       .catch(() => undefined);
 
-    if (ctx.dryRun) return { deployed: false, dryRun: true };
-
-    const result = await spawnSafe(deploy.command, [], {
-      cwd: config.workspace.rootDir,
-      env: buildMinimalEnv(deploy.env ?? {}),
-      timeoutMs: deploy.timeoutMs ?? 1_200_000,
-    });
-
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `Deploy failed (exit ${result.exitCode}):\n${result.stderr}`,
-      );
+    if (ctx.dryRun) {
+      if (deploy.rollbackCommand) {
+        ctx.logger.info({ ticketKey }, "Would execute rollback on failure");
+      }
+      return { deployed: false, dryRun: true };
     }
 
-    // Health check
-    if (deploy.healthCheckUrl) {
-      await ctx.telegram
-        .updateDetail(`Checking health: ${deploy.healthCheckUrl}…`)
-        .catch(() => undefined);
-      await healthCheck(
-        deploy.healthCheckUrl,
-        deploy.healthCheckTimeoutMs ?? 30_000,
-      );
+    try {
+      const result = await spawnSafe(deploy.command, [], {
+        cwd: config.workspace.rootDir,
+        env: buildMinimalEnv(deploy.env ?? {}),
+        timeoutMs: deploy.timeoutMs ?? 1_200_000,
+      });
+
+      if (result.exitCode !== 0) {
+        throw new Error(
+          `Deploy failed (exit ${result.exitCode}):\n${result.stderr}`,
+        );
+      }
+
+      // Health check
+      if (deploy.healthCheckUrl) {
+        await ctx.telegram
+          .updateDetail(`Checking health: ${deploy.healthCheckUrl}…`)
+          .catch(() => undefined);
+        await healthCheck(
+          deploy.healthCheckUrl,
+          deploy.healthCheckTimeoutMs ?? 30_000,
+        );
+      }
+    } catch (deployError) {
+      if (deploy.rollbackCommand) {
+        await attemptRollback(ctx, "deploy");
+      }
+      throw deployError;
     }
 
     ctx.logger.info({ ticketKey }, "Deploy successful");
@@ -67,3 +80,56 @@ async function healthCheck(url: string, timeoutMs: number): Promise<void> {
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
+
+async function attemptRollback(
+  ctx: PipelineContext,
+  trigger: "deploy" | "test",
+): Promise<void> {
+  try {
+    const rollbackResult = await executeRollback(ctx.config, {
+      ticketKey: ctx.ticketKey,
+      branchName: ctx.state.current.branchName ?? undefined,
+      logger: ctx.logger,
+    });
+
+    ctx.state.emit({
+      type: "DEPLOY_ROLLED_BACK",
+      trigger,
+      success: rollbackResult.success,
+      durationMs: rollbackResult.durationMs,
+    });
+
+    await ctx.telegram
+      .notifyRollback(ctx.ticketKey, {
+        trigger,
+        success: rollbackResult.success,
+        error: rollbackResult.success ? undefined : rollbackResult.stderr,
+      })
+      .catch(() => undefined);
+  } catch (rollbackError) {
+    const errorMsg =
+      rollbackError instanceof Error
+        ? rollbackError.message
+        : String(rollbackError);
+
+    ctx.state.emit({
+      type: "DEPLOY_ROLLED_BACK",
+      trigger,
+      success: false,
+      durationMs: 0,
+    });
+
+    await ctx.telegram
+      .notifyRollback(ctx.ticketKey, {
+        trigger,
+        success: false,
+        error: errorMsg,
+      })
+      .catch(() => undefined);
+
+    ctx.logger.error(
+      { ticketKey: ctx.ticketKey, error: errorMsg },
+      "Rollback itself failed",
+    );
+  }
+}

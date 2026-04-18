@@ -1,6 +1,7 @@
 import type { Stage, PipelineContext, StageOutput } from "./types.js";
 import { runAgent } from "../runner.js";
 import { getContextFilesForStage } from "../../memory/context-builder.js";
+import { executeRollback } from "../rollback.js";
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
@@ -87,8 +88,19 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
     }
 
     const failOnTest = config.pipeline?.failOnTestFailure ?? false;
-    if (failOnTest)
+    if (failOnTest) {
+      if (config.deploy.rollbackCommand) {
+        if (ctx.dryRun) {
+          ctx.logger.info(
+            { ticketKey },
+            "Would execute rollback on test failure",
+          );
+        } else {
+          await attemptRollback(ctx, "test");
+        }
+      }
       throw lastError ?? new Error("Tests failed after all retries");
+    }
 
     await ctx.telegram.send(
       `⚠️ <b>${ticketKey}</b> UI tests failed after ${retries + 1} attempts. Continuing pipeline.\n${lastError?.message}`,
@@ -96,3 +108,56 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
     return { passed: false, summary: lastError?.message ?? "Tests failed" };
   },
 };
+
+async function attemptRollback(
+  ctx: PipelineContext,
+  trigger: "deploy" | "test",
+): Promise<void> {
+  try {
+    const rollbackResult = await executeRollback(ctx.config, {
+      ticketKey: ctx.ticketKey,
+      branchName: ctx.state.current.branchName ?? undefined,
+      logger: ctx.logger,
+    });
+
+    ctx.state.emit({
+      type: "DEPLOY_ROLLED_BACK",
+      trigger,
+      success: rollbackResult.success,
+      durationMs: rollbackResult.durationMs,
+    });
+
+    await ctx.telegram
+      .notifyRollback(ctx.ticketKey, {
+        trigger,
+        success: rollbackResult.success,
+        error: rollbackResult.success ? undefined : rollbackResult.stderr,
+      })
+      .catch(() => undefined);
+  } catch (rollbackError) {
+    const errorMsg =
+      rollbackError instanceof Error
+        ? rollbackError.message
+        : String(rollbackError);
+
+    ctx.state.emit({
+      type: "DEPLOY_ROLLED_BACK",
+      trigger,
+      success: false,
+      durationMs: 0,
+    });
+
+    await ctx.telegram
+      .notifyRollback(ctx.ticketKey, {
+        trigger,
+        success: false,
+        error: errorMsg,
+      })
+      .catch(() => undefined);
+
+    ctx.logger.error(
+      { ticketKey: ctx.ticketKey, error: errorMsg },
+      "Rollback itself failed",
+    );
+  }
+}

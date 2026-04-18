@@ -69,6 +69,7 @@ export const ProjectConfigSchema = z.object({
       enabled: z.boolean().default(false),
       command: z.string().optional(),
       rollbackCommand: z.string().optional(),
+      rollbackTimeoutMs: z.number().default(60_000),
       timeoutMs: z.number().default(1_200_000),
       healthCheckUrl: z.string().optional(),
       healthCheckTimeoutMs: z.number().default(30_000),
