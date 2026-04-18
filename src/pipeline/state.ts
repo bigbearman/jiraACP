@@ -23,6 +23,7 @@ export type PipelineEvent =
   | { type: "HUMAN_APPROVAL_REQUESTED"; context: unknown; timestamp: string }
   | { type: "HUMAN_APPROVED"; timestamp: string }
   | { type: "HUMAN_REJECTED"; reason: string; timestamp: string }
+  | { type: "APPROVAL_REMINDER_SENT"; count: number; timestamp: string }
   | { type: "PIPELINE_COMPLETED"; timestamp: string }
   | { type: "PIPELINE_ABORTED"; reason: string; timestamp: string }
   | { type: "ANALYZE_PARSE_FALLBACK"; rawSnippet: string; timestamp: string };

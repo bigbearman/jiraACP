@@ -118,6 +118,8 @@ export const ProjectConfigSchema = z.object({
         reviewApprovalTimeoutAction: z
           .enum(["abort", "merge-anyway"])
           .default("abort"),
+        reminderIntervalMs: z.number().default(1_800_000),
+        maxReminders: z.number().default(3),
       })
       .default({}),
   }),

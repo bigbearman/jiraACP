@@ -91,6 +91,13 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
               timeoutMs: hil?.reviewApprovalTimeoutMs ?? 86_400_000,
               onTimeout: hil?.reviewApprovalTimeoutAction ?? "abort",
               topicId: config.telegram.topicId,
+              reminderIntervalMs: hil?.reminderIntervalMs,
+              maxReminders: hil?.maxReminders,
+              onReminder: (count) =>
+                ctx.state.emit({
+                  type: "APPROVAL_REMINDER_SENT",
+                  count,
+                }),
             },
           );
 
