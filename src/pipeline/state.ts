@@ -24,7 +24,8 @@ export type PipelineEvent =
   | { type: "HUMAN_APPROVED"; timestamp: string }
   | { type: "HUMAN_REJECTED"; reason: string; timestamp: string }
   | { type: "PIPELINE_COMPLETED"; timestamp: string }
-  | { type: "PIPELINE_ABORTED"; reason: string; timestamp: string };
+  | { type: "PIPELINE_ABORTED"; reason: string; timestamp: string }
+  | { type: "ANALYZE_PARSE_FALLBACK"; rawSnippet: string; timestamp: string };
 
 // ── Derived state ─────────────────────────────────────────────────────────
 

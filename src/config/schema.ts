@@ -138,6 +138,7 @@ export const ProjectConfigSchema = z.object({
           notify: z.number().default(30_000),
         })
         .default({}),
+      analyzeFallbackScore: z.number().min(0).max(1).default(0.5),
       agentStallTimeoutMs: z.number().default(300_000),
       skipClarificationIfClear: z.boolean().default(true),
       failOnTestFailure: z.boolean().default(false),
