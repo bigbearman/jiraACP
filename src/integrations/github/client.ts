@@ -133,12 +133,13 @@ export function createGitHubClient(
     },
 
     async getCheckRuns(sha) {
-      const { data } = await octokit.checks.listForRef({
+      const runs = await octokit.paginate(octokit.checks.listForRef, {
         owner,
         repo,
         ref: sha,
+        per_page: 100,
       });
-      return data.check_runs.map((run) => ({
+      return runs.map((run) => ({
         id: run.id,
         name: run.name,
         status: run.status,

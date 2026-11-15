@@ -3,44 +3,42 @@ import { requestClarification } from "../../integrations/telegram/human-loop.js"
 import { appendClarifications } from "../../memory/context-builder.js";
 import path from "node:path";
 
+const DEFAULT_QUESTIONS = ["Please clarify the ticket requirements."];
+
+function readAnalyzeOutput(ctx: PipelineContext): {
+  needsClarification: boolean;
+  questions: string[];
+} {
+  const output = ctx.state.lastStageOutput("analyze");
+  if (typeof output !== "object" || output === null) {
+    return { needsClarification: false, questions: [] };
+  }
+  return {
+    needsClarification:
+      "needsClarification" in output && output.needsClarification === true,
+    questions:
+      "questions" in output && Array.isArray(output.questions)
+        ? output.questions.filter((q): q is string => typeof q === "string")
+        : [],
+  };
+}
+
 export const clarifyStage: Stage = {
   id: "clarify",
   name: "Clarify",
   model: "haiku",
 
   async shouldSkip(ctx: PipelineContext): Promise<boolean> {
-    const lastAnalyze = ctx.state.current.completedStages.includes("analyze");
-    if (!lastAnalyze) return true;
-    // Read analysis output from event log
-    const events: any = (
-      ctx.state as unknown as {
-        events: Array<{ type: string; stage?: string; output?: unknown }>;
-      }
-    ).events;
-    const analyzeEvent = events.findLast(
-      (e: any) => e.type === "STAGE_COMPLETED" && e.stage === "analyze",
-    );
-    const output = analyzeEvent?.output as
-      | { needsClarification?: boolean }
-      | undefined;
-    return !output?.needsClarification;
+    if (!ctx.state.current.completedStages.includes("analyze")) return true;
+    return !readAnalyzeOutput(ctx).needsClarification;
   },
 
   async run(ctx: PipelineContext): Promise<StageOutput> {
     const { config, ticketKey, memoryDir } = ctx;
     const storeDir = path.join(config.workspace.rootDir, ".jira-acp");
 
-    // Get questions from analyze stage output
-    const events: any = (
-      ctx.state as unknown as {
-        events: Array<{ type: string; stage?: string; output?: unknown }>;
-      }
-    ).events;
-    const analyzeEvent = events?.findLast(
-      (e: { type: string; stage?: string; output?: unknown }) => e.type === "STAGE_COMPLETED" && e.stage === "analyze",
-    );
-    const questions = (analyzeEvent?.output as { questions?: string[] })
-      ?.questions ?? ["Please clarify the ticket requirements."];
+    const asked = readAnalyzeOutput(ctx).questions;
+    const questions = asked.length > 0 ? asked : DEFAULT_QUESTIONS;
 
     ctx.logger.info(
       { ticketKey, questions },

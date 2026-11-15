@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getBot } from "./bot.js";
+import { escapeHtml } from "../../utils/html.js";
 
 export type TimeoutAction = "skip" | "abort" | "proceed-with-warning";
 
@@ -64,7 +65,7 @@ export async function requestClarification(
   const formatted = [
     `⚠️ <b>${ticketKey}</b> — Cần clarify trước khi code`,
     "",
-    ...questions.map((q, i) => `${i + 1}. ${q}`),
+    ...questions.map((q, i) => `${i + 1}. ${escapeHtml(q)}`),
     "",
     "Reply với:",
     `<code>/answer ${ticketKey}</code>`,
@@ -188,7 +189,7 @@ export async function requestApproval(
 
   const issueLines = issues
     .filter((i) => i.severity === "major")
-    .map((i) => `• ${i.message}`)
+    .map((i) => `• ${escapeHtml(i.message)}`)
     .join("\n");
 
   const text = [

@@ -81,6 +81,7 @@ function makeCtx(
         defaultBranch: "main",
         reviewers: [],
         prDraftByDefault: false,
+        ciNoChecksGraceMs: 0,
       },
       workspace: { rootDir: tmpDir },
       telegram: { botToken: "123:ABC", chatId: "-100" },

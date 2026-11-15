@@ -26,16 +26,34 @@ Reply with JSON only:
 `.trim();
 
 const RETRY_SUFFIX =
-  '\nIMPORTANT: Return ONLY valid JSON: {"score": 0.7, "missing": [...], "questions": [...]}';
+  '\nIMPORTANT: Return ONLY valid JSON: {"score": <number 0.0-1.0>, "missing": [...], "questions": [...]}';
+
+const stringList = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string")
+    : [];
 
 function tryParseJson(raw: string): ClarityResult | null {
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
+  let parsed: unknown;
   try {
-    return JSON.parse(jsonMatch[0]) as ClarityResult;
+    parsed = JSON.parse(jsonMatch[0]);
   } catch {
     return null;
   }
+  // Agent output is untrusted: a missing or non-numeric score must not pass
+  // the clarity gate, so it counts as a parse failure.
+  if (typeof parsed !== "object" || parsed === null || !("score" in parsed)) {
+    return null;
+  }
+  const { score } = parsed;
+  if (typeof score !== "number" || !(score >= 0 && score <= 1)) return null;
+  return {
+    score,
+    missing: stringList("missing" in parsed ? parsed.missing : undefined),
+    questions: stringList("questions" in parsed ? parsed.questions : undefined),
+  };
 }
 
 function tryExtractScore(raw: string): number | null {
@@ -65,51 +83,36 @@ export const analyzeStage: Stage = {
       "acceptanceCriteria",
     ];
     const prompt = CLARITY_PROMPT(ticketCtx, requiredFields);
+    // Two attempts share the stage budget, minus a margin so the regex and
+    // default-score fallbacks still run before the stage itself times out.
+    const attemptTimeoutMs = Math.max(
+      1_000,
+      Math.floor((config.pipeline?.stageTimeouts?.analyze ?? 120_000) / 2) -
+        2_000,
+    );
     const agentOpts = {
       workdir: config.workspace.rootDir,
       model: "haiku" as const,
-      timeoutMs: 60_000,
-      stallTimeoutMs: 30_000,
+      timeoutMs: attemptTimeoutMs,
+      stallTimeoutMs: Math.min(30_000, attemptTimeoutMs),
     };
 
     const threshold = config.jira.clarityScoreThreshold ?? 0.7;
 
-    // Attempt 1: parse JSON from agent output
-    const raw = await runAgent({ ...agentOpts, prompt });
-    const firstResult = tryParseJson(raw);
-
-    if (firstResult) {
-      const needsClarification = firstResult.score < threshold;
-      ctx.logger.info(
-        { ticketKey, score: firstResult.score, threshold, needsClarification },
-        "Clarity analysis done",
-      );
-      return { ...firstResult, needsClarification };
-    }
-
-    // Attempt 2: retry agent call with stricter instruction
-    ctx.logger.warn(
-      { ticketKey },
-      "First clarity parse failed — retrying with stricter prompt",
-    );
-    const retryRaw = await runAgent({
-      ...agentOpts,
-      prompt: prompt + RETRY_SUFFIX,
-    });
-    const retryResult = tryParseJson(retryRaw);
-
-    if (retryResult) {
-      const needsClarification = retryResult.score < threshold;
-      ctx.logger.info(
-        {
-          ticketKey,
-          score: retryResult.score,
-          threshold,
-          needsClarification,
-        },
-        "Clarity analysis done (retry parse)",
-      );
-      return { ...retryResult, needsClarification };
+    // Attempts 1 and 2: parse JSON, retrying once with a stricter instruction
+    let retryRaw = "";
+    for (const attemptPrompt of [prompt, prompt + RETRY_SUFFIX]) {
+      retryRaw = await runAgent({ ...agentOpts, prompt: attemptPrompt });
+      const result = tryParseJson(retryRaw);
+      if (result) {
+        const needsClarification = result.score < threshold;
+        ctx.logger.info(
+          { ticketKey, score: result.score, threshold, needsClarification },
+          "Clarity analysis done",
+        );
+        return { ...result, needsClarification };
+      }
+      ctx.logger.warn({ ticketKey }, "Clarity output is not valid JSON");
     }
 
     // Attempt 3: regex score extraction from retry output
@@ -139,9 +142,14 @@ export const analyzeStage: Stage = {
       rawSnippet: retryRaw.slice(0, 500),
     });
 
-    await ctx.telegram.send(
-      `⚠️ [${ticketKey}] Analyze stage: JSON parse fallback triggered. Using default score.`,
-    );
+    try {
+      await ctx.telegram.send(
+        `⚠️ [${ticketKey}] Analyze stage: JSON parse fallback triggered. Using default score.`,
+      );
+    } catch (err) {
+      // The warning is best-effort: the fallback must still apply
+      ctx.logger.warn({ ticketKey, err }, "Could not send fallback warning");
+    }
 
     const fallbackScore = config.pipeline.analyzeFallbackScore ?? 0.5;
     const needsClarification = fallbackScore < threshold;

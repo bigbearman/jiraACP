@@ -54,9 +54,11 @@ export const ProjectConfigSchema = z.object({
     reviewers: z.array(z.string()).default([]),
     prDraftByDefault: z.boolean().default(false),
     majorIssueThreshold: z.number().default(1),
-    ciWaitTimeoutMs: z.number().default(600_000),
     waitForCI: z.boolean().default(true),
     ciTimeoutMs: z.number().default(1_800_000),
+    // How long to wait for the first check run to appear before concluding
+    // the repo has no CI. Ignored when requiredChecks is set.
+    ciNoChecksGraceMs: z.number().default(60_000),
     ciPollBackoff: z
       .object({
         initialMs: z.number().default(5_000),
@@ -102,6 +104,8 @@ export const ProjectConfigSchema = z.object({
     botToken: z.string(),
     chatId: z.union([z.string(), z.number()]),
     topicId: z.number().optional(),
+    // Telegram user ids allowed to control the bot. Empty = anyone in chatId.
+    allowedUserIds: z.array(z.number()).default([]),
     notifyOnStages: z
       .array(
         z.enum([
@@ -141,7 +145,7 @@ export const ProjectConfigSchema = z.object({
       stageTimeouts: z
         .object({
           fetch: z.number().default(30_000),
-          analyze: z.number().default(60_000),
+          analyze: z.number().default(120_000), // two agent attempts
           clarify: z.number().default(3_600_000),
           code: z.number().default(1_800_000),
           git: z.number().default(60_000),

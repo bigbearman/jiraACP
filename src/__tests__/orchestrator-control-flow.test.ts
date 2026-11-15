@@ -130,6 +130,7 @@ function makeConfig(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
       repo: "repo",
       token: "ghp",
       defaultBranch: "main",
+      ciNoChecksGraceMs: 0,
     },
     workspace: { rootDir: tmpHome },
     telegram: { botToken: "123:ABC", chatId: "-100" },

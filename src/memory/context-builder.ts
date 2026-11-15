@@ -89,23 +89,6 @@ export function writeReviewAgentOutput(
   fs.writeFileSync(path.join(memoryDir, fileName), raw);
 }
 
-export function mergeReviewOutputs(memoryDir: string): string {
-  const parts: string[] = [];
-
-  for (const agentId of ["logic", "quality"] as const) {
-    const filePath = path.join(memoryDir, REVIEW_AGENT_FILES[agentId]);
-    if (fs.existsSync(filePath)) {
-      parts.push(
-        `## ${agentId} review\n\n${fs.readFileSync(filePath, "utf8")}`,
-      );
-    }
-  }
-
-  const merged = parts.join("\n\n---\n\n");
-  fs.writeFileSync(path.join(memoryDir, "review-feedback.md"), merged);
-  return merged;
-}
-
 export function writeCIStatus(memoryDir: string, result: CIResult): void {
   fs.mkdirSync(memoryDir, { recursive: true });
 

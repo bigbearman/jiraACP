@@ -168,6 +168,16 @@ export class StateManager {
     return this.events.reduce(applyEvent, { ...INITIAL_STATE });
   }
 
+  /** Output of the most recent successful run of a stage, or undefined. */
+  lastStageOutput(stage: StageId): unknown {
+    return this.events
+      .filter(
+        (e): e is Extract<PipelineEvent, { type: "STAGE_COMPLETED" }> =>
+          e.type === "STAGE_COMPLETED" && e.stage === stage,
+      )
+      .at(-1)?.output;
+  }
+
   private load(): PipelineEvent[] {
     if (!fs.existsSync(this.statePath)) return [];
     return fs

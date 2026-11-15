@@ -81,7 +81,7 @@ function makeCtx(overrides: Partial<PipelineContext> = {}): PipelineContext {
         reviewers: [],
         prDraftByDefault: false,
         majorIssueThreshold: 1,
-        ciWaitTimeoutMs: 600_000,
+        ciNoChecksGraceMs: 0,
       },
       workspace: { rootDir: tmpDir, allowedPaths: [] },
       deploy: {
@@ -152,6 +152,13 @@ function makeCtx(overrides: Partial<PipelineContext> = {}): PipelineContext {
     } as TelegramNotifier,
     state: {
       emit: vi.fn(),
+      // Tests seed `events`; mirror StateManager.lastStageOutput over them
+      lastStageOutput(
+        this: { events?: Array<{ stage?: string; output?: unknown }> },
+        stage: string,
+      ): unknown {
+        return this.events?.filter((e) => e.stage === stage).at(-1)?.output;
+      },
       current: {
         ticketKey: "HI-200",
         currentStage: null,

@@ -1,7 +1,8 @@
 import type { Stage, PipelineContext, StageOutput } from "./types.js";
 import { runAgent } from "../runner.js";
 import { getContextFilesForStage } from "../../memory/context-builder.js";
-import { executeRollback } from "../rollback.js";
+import { attemptRollback } from "../rollback.js";
+import { escapeHtml } from "../../utils/html.js";
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
@@ -72,7 +73,8 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
           failures: string[];
         };
 
-        if (result.passed) {
+        // Agent output is untrusted: only a real boolean true counts as a pass
+        if (result.passed === true) {
           ctx.logger.info({ ticketKey }, "UI tests passed");
           return { passed: true, summary: result.summary };
         }
@@ -89,7 +91,8 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
 
     const failOnTest = config.pipeline?.failOnTestFailure ?? false;
     if (failOnTest) {
-      if (config.deploy.rollbackCommand) {
+      // Only roll back a deploy that this run actually performed
+      if (config.deploy.rollbackCommand && wasDeployed(ctx)) {
         if (ctx.dryRun) {
           ctx.logger.info(
             { ticketKey },
@@ -102,62 +105,24 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
       throw lastError ?? new Error("Tests failed after all retries");
     }
 
-    await ctx.telegram.send(
-      `⚠️ <b>${ticketKey}</b> UI tests failed after ${retries + 1} attempts. Continuing pipeline.\n${lastError?.message}`,
-    );
+    try {
+      await ctx.telegram.send(
+        `⚠️ <b>${ticketKey}</b> UI tests failed after ${retries + 1} attempts. Continuing pipeline.\n${escapeHtml(lastError?.message ?? "")}`,
+      );
+    } catch (err) {
+      // Best-effort notice: the pipeline continues either way
+      ctx.logger.warn({ ticketKey, err }, "Could not send test failure notice");
+    }
     return { passed: false, summary: lastError?.message ?? "Tests failed" };
   },
 };
 
-async function attemptRollback(
-  ctx: PipelineContext,
-  trigger: "deploy" | "test",
-): Promise<void> {
-  try {
-    const rollbackResult = await executeRollback(ctx.config, {
-      ticketKey: ctx.ticketKey,
-      branchName: ctx.state.current.branchName ?? undefined,
-      logger: ctx.logger,
-    });
-
-    ctx.state.emit({
-      type: "DEPLOY_ROLLED_BACK",
-      trigger,
-      success: rollbackResult.success,
-      durationMs: rollbackResult.durationMs,
-    });
-
-    await ctx.telegram
-      .notifyRollback(ctx.ticketKey, {
-        trigger,
-        success: rollbackResult.success,
-        error: rollbackResult.success ? undefined : rollbackResult.stderr,
-      })
-      .catch(() => undefined);
-  } catch (rollbackError) {
-    const errorMsg =
-      rollbackError instanceof Error
-        ? rollbackError.message
-        : String(rollbackError);
-
-    ctx.state.emit({
-      type: "DEPLOY_ROLLED_BACK",
-      trigger,
-      success: false,
-      durationMs: 0,
-    });
-
-    await ctx.telegram
-      .notifyRollback(ctx.ticketKey, {
-        trigger,
-        success: false,
-        error: errorMsg,
-      })
-      .catch(() => undefined);
-
-    ctx.logger.error(
-      { ticketKey: ctx.ticketKey, error: errorMsg },
-      "Rollback itself failed",
-    );
-  }
+function wasDeployed(ctx: PipelineContext): boolean {
+  const output = ctx.state.lastStageOutput("deploy");
+  return (
+    typeof output === "object" &&
+    output !== null &&
+    "deployed" in output &&
+    output.deployed === true
+  );
 }

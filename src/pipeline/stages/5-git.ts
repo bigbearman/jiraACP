@@ -111,6 +111,7 @@ export const gitStage: Stage = {
           multiplier: backoff.multiplier ?? 2,
           maxMs: backoff.maxMs ?? 60_000,
           requiredChecks: config.github.requiredChecks ?? [],
+          noChecksGraceMs: config.github.ciNoChecksGraceMs ?? 60_000,
         };
 
         state.emit({
@@ -167,9 +168,15 @@ export const gitStage: Stage = {
 
 function classifyPushError(stderr: string, branchName: string): Error {
   const lower = stderr.toLowerCase();
-  if (lower.includes("already exists") || lower.includes("src refspec")) {
+  if (lower.includes("already exists")) {
     return new Error(
       `BRANCH_ALREADY_EXISTS: branch '${branchName}' already exists on remote.\n${stderr}`,
+    );
+  }
+  // "src refspec X does not match any" = the branch is missing locally
+  if (lower.includes("src refspec")) {
+    return new Error(
+      `GIT_BRANCH_MISSING: local branch '${branchName}' does not exist — the code stage did not create or commit it.\n${stderr}`,
     );
   }
   if (lower.includes("permission denied") || lower.includes("permission to")) {

@@ -46,7 +46,6 @@ const baseConfig: ProjectConfig = {
     reviewers: [],
     prDraftByDefault: false,
     majorIssueThreshold: 1,
-    ciWaitTimeoutMs: 600_000,
   },
   workspace: { rootDir: tmpDir, allowedPaths: [] },
   deploy: {

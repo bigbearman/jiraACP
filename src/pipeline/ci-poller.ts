@@ -4,12 +4,17 @@ import type { Logger } from "pino";
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
 
+// Conclusions that do not block a merge on GitHub
+const PASSING_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
+
 export interface CIPollConfig {
   timeoutMs: number;
   initialMs: number;
   multiplier: number;
   maxMs: number;
   requiredChecks: string[];
+  /** How long to wait for a first check run before deciding the repo has no CI */
+  noChecksGraceMs: number;
 }
 
 export interface CIResult {
@@ -22,6 +27,9 @@ export interface CIResult {
   pendingChecks: string[];
 }
 
+const isPassing = (check: CheckRun): boolean =>
+  check.conclusion !== null && PASSING_CONCLUSIONS.has(check.conclusion);
+
 export async function waitForCI(
   github: GitHubClient,
   sha: string,
@@ -29,138 +37,115 @@ export async function waitForCI(
   logger: Logger,
 ): Promise<CIResult> {
   const startTime = Date.now();
+  const required = config.requiredChecks;
+  // A grace period longer than the whole budget would turn "no CI" into a timeout
+  const graceMs = Math.min(config.noChecksGraceMs, config.timeoutMs);
   let delay = config.initialMs;
+  let warnedMissing = false;
 
   logger.info(
-    { sha, timeoutMs: config.timeoutMs, requiredChecks: config.requiredChecks },
+    { sha, timeoutMs: config.timeoutMs, requiredChecks: required },
     "Starting CI polling",
   );
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    const checks = await github.getCheckRuns(sha);
     const elapsed = Date.now() - startTime;
-    if (elapsed >= config.timeoutMs) {
-      const checks = await fetchChecks(github, sha);
-      const pending = getPendingCheckNames(checks, config.requiredChecks);
-      return {
-        status: "timeout",
-        checks,
-        passedCount: checks.filter((c) => c.conclusion === "success").length,
-        failedCount: checks.filter(
-          (c) =>
-            c.conclusion !== null &&
-            c.conclusion !== "success" &&
-            c.status === "completed",
-        ).length,
-        durationMs: elapsed,
-        failedLogs: [],
-        pendingChecks: pending,
-      };
-    }
 
-    const checks = await fetchChecks(github, sha);
-
-    // No checks on repo → immediate success
-    if (checks.length === 0) {
-      logger.info("No CI checks found on repo, treating as success");
-      return {
-        status: "success",
-        checks: [],
-        passedCount: 0,
-        failedCount: 0,
-        durationMs: Date.now() - startTime,
-        failedLogs: [],
-        pendingChecks: [],
-      };
-    }
-
-    // Filter to required checks if configured
     const relevant =
-      config.requiredChecks.length > 0
-        ? filterRequired(checks, config.requiredChecks, logger)
+      required.length > 0
+        ? checks.filter((c) => required.includes(c.name))
         : checks;
+    // A required check that has not been registered yet is still pending
+    const missing = required.filter((n) => !checks.some((c) => c.name === n));
+    const pendingChecks = [
+      ...missing,
+      ...relevant.filter((c) => c.status !== "completed").map((c) => c.name),
+    ];
+    const passedCount = relevant.filter(isPassing).length;
+    const failed = relevant.filter(
+      (c) => c.status === "completed" && !isPassing(c),
+    );
+    const base = {
+      checks: relevant,
+      passedCount,
+      failedCount: failed.length,
+      durationMs: elapsed,
+    };
 
-    const allCompleted = relevant.every((c) => c.status === "completed");
+    // Check runs are registered a few seconds after the push, so an empty
+    // list only means "no CI" once the grace period has passed.
+    if (
+      checks.length === 0 &&
+      required.length === 0 &&
+      elapsed >= graceMs
+    ) {
+      logger.info("No CI checks found on repo, treating as success");
+      return { ...base, status: "success", failedLogs: [], pendingChecks: [] };
+    }
 
-    if (allCompleted) {
-      const passed = relevant.filter((c) => c.conclusion === "success").length;
-      const failed = relevant.filter((c) => c.conclusion !== "success");
-
-      const failedLogs: { name: string; log: string }[] = [];
-      for (const check of failed) {
-        try {
-          const log = await github.getCheckRunLog(check.id);
-          failedLogs.push({ name: check.name, log });
-        } catch (err) {
-          logger.warn(
-            { checkName: check.name, error: err },
-            "Failed to fetch log for check run",
-          );
-          failedLogs.push({ name: check.name, log: "(log unavailable)" });
-        }
-      }
-
+    if (relevant.length > 0 && pendingChecks.length === 0) {
       const status = failed.length > 0 ? "failure" : "success";
       logger.info(
-        { status, passed, failed: failed.length },
+        { status, passed: passedCount, failed: failed.length },
         "CI checks completed",
       );
-
       return {
+        ...base,
         status,
-        checks: relevant,
-        passedCount: passed,
-        failedCount: failed.length,
-        durationMs: Date.now() - startTime,
-        failedLogs,
+        failedLogs: await fetchFailedLogs(github, failed, logger),
         pendingChecks: [],
       };
     }
 
-    const pending = relevant
-      .filter((c) => c.status !== "completed")
-      .map((c) => c.name);
+    if (elapsed >= config.timeoutMs) {
+      return { ...base, status: "timeout", failedLogs: [], pendingChecks };
+    }
+
+    // A required check that never registers (typo, path-filtered workflow)
+    // keeps the poll going until the timeout, so say which one it is.
+    if (missing.length > 0 && elapsed >= graceMs && !warnedMissing) {
+      warnedMissing = true;
+      logger.warn(
+        { missing },
+        "Required checks not registered yet — still waiting for them",
+      );
+    }
+
     logger.debug(
-      { pending, delayMs: delay },
+      { pending: pendingChecks, delayMs: delay },
       "CI checks still pending, waiting",
     );
-
-    await sleep(delay);
+    // While no check exists yet, never sleep past the end of the grace period
+    const untilGrace =
+      checks.length === 0 && required.length === 0
+        ? graceMs - elapsed
+        : Infinity;
+    await sleep(Math.min(delay, config.timeoutMs - elapsed, untilGrace));
     delay = Math.min(delay * config.multiplier, config.maxMs);
   }
 }
 
-async function fetchChecks(
+async function fetchFailedLogs(
   github: GitHubClient,
-  sha: string,
-): Promise<CheckRun[]> {
-  return github.getCheckRuns(sha);
-}
-
-function filterRequired(
-  checks: CheckRun[],
-  requiredChecks: string[],
+  failed: CheckRun[],
   logger: Logger,
-): CheckRun[] {
-  const checkNames = new Set(checks.map((c) => c.name));
-  for (const required of requiredChecks) {
-    if (!checkNames.has(required)) {
+): Promise<{ name: string; log: string }[]> {
+  const logs: { name: string; log: string }[] = [];
+  for (const check of failed) {
+    try {
+      logs.push({
+        name: check.name,
+        log: await github.getCheckRunLog(check.id),
+      });
+    } catch (err) {
       logger.warn(
-        { requiredCheck: required },
-        "Required check not found in CI runs",
+        { checkName: check.name, error: err },
+        "Failed to fetch log for check run",
       );
+      logs.push({ name: check.name, log: "(log unavailable)" });
     }
   }
-  return checks.filter((c) => requiredChecks.includes(c.name));
-}
-
-function getPendingCheckNames(
-  checks: CheckRun[],
-  requiredChecks: string[],
-): string[] {
-  const relevant =
-    requiredChecks.length > 0
-      ? checks.filter((c) => requiredChecks.includes(c.name))
-      : checks;
-  return relevant.filter((c) => c.status !== "completed").map((c) => c.name);
+  return logs;
 }

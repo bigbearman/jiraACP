@@ -1,5 +1,6 @@
 import type { Stage, PipelineContext, StageOutput } from "./types.js";
 import { writeTicketContext } from "../../memory/context-builder.js";
+import { escapeHtml } from "../../utils/html.js";
 
 export const fetchStage: Stage = {
   id: "fetch",
@@ -61,7 +62,7 @@ export const fetchStage: Stage = {
 
     ctx.logger.info({ ticketKey, summary }, "Ticket fetched");
     await ctx.telegram
-      .updateDetail(`📋 ${summary.slice(0, 80)}`)
+      .updateDetail(`📋 ${escapeHtml(summary.slice(0, 80))}`)
       .catch(() => undefined);
 
     return { summary, description, acceptanceCriteria, status, assignee };

@@ -2,6 +2,7 @@ import type { StageId } from "../../config/schema.js";
 import { getBot } from "./bot.js";
 import { getOrCreateTopic } from "./topic-manager.js";
 import { getVerbosity } from "./prefs.js";
+import { escapeHtml } from "../../utils/html.js";
 
 export interface TelegramNotifier {
   send(message: string): Promise<number>;
@@ -91,6 +92,8 @@ export function createTelegramNotifier(
     heartbeatTimer = setInterval(() => {
       upsertProgress().catch(() => undefined);
     }, 30_000);
+    // Never keep the process alive just to refresh a progress message
+    heartbeatTimer.unref();
   }
 
   function stopHeartbeat(): void {
@@ -186,7 +189,8 @@ export function createTelegramNotifier(
     },
 
     async sendError(tk, err) {
-      const text = err instanceof Error ? err.message : String(err);
+      stopHeartbeat();
+      const text = escapeHtml(err instanceof Error ? err.message : String(err));
       const threadOpts = await makeThreadOpts();
       await bot.api.sendMessage(
         chatId,
@@ -196,9 +200,10 @@ export function createTelegramNotifier(
     },
 
     async sendDone(tk, { summary, prNumber, deployUrl }) {
-      const lines = [`✅ <b>${tk}</b> completed`, summary];
+      stopHeartbeat();
+      const lines = [`✅ <b>${tk}</b> completed`, escapeHtml(summary)];
       if (prNumber) lines.push(`PR: #${prNumber}`);
-      if (deployUrl) lines.push(`Deploy: ${deployUrl}`);
+      if (deployUrl) lines.push(`Deploy: ${escapeHtml(deployUrl)}`);
       const threadOpts = await makeThreadOpts();
       await bot.api.sendMessage(chatId, lines.join("\n"), {
         parse_mode: "HTML",
@@ -231,7 +236,7 @@ export function createTelegramNotifier(
         const threadOpts = await makeThreadOpts();
         await bot.api.sendMessage(
           chatId,
-          `❌ Stage <b>${stage}</b> failed:\n<code>${error.slice(0, 300)}</code>`,
+          `❌ Stage <b>${stage}</b> failed:\n<code>${escapeHtml(error.slice(0, 300))}</code>`,
           { parse_mode: "HTML", ...threadOpts },
         );
       }
@@ -252,7 +257,7 @@ export function createTelegramNotifier(
       const threadOpts = await makeThreadOpts();
       const message = success
         ? `⚠️ <b>${tk}</b> — Deploy failed (${trigger}), rolled back ✓`
-        : `🚨 <b>${tk}</b> — Deploy failed (${trigger}), rollback ALSO failed ⚠️${error ? `\n<code>${error.slice(0, 300)}</code>` : ""}`;
+        : `🚨 <b>${tk}</b> — Deploy failed (${trigger}), rollback ALSO failed ⚠️${error ? `\n<code>${escapeHtml(error.slice(0, 300))}</code>` : ""}`;
       await bot.api.sendMessage(chatId, message, {
         parse_mode: "HTML",
         ...threadOpts,

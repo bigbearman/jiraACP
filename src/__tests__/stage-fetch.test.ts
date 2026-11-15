@@ -104,7 +104,6 @@ function makeCtx(jiraGet: ReturnType<typeof vi.fn>): PipelineContext {
         reviewers: [],
         prDraftByDefault: false,
         majorIssueThreshold: 1,
-        ciWaitTimeoutMs: 600_000,
       },
       workspace: { rootDir: tmpDir, allowedPaths: [] },
       deploy: {
