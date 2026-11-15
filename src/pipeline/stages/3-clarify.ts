@@ -12,13 +12,13 @@ export const clarifyStage: Stage = {
     const lastAnalyze = ctx.state.current.completedStages.includes("analyze");
     if (!lastAnalyze) return true;
     // Read analysis output from event log
-    const events = (
+    const events: any = (
       ctx.state as unknown as {
         events: Array<{ type: string; stage?: string; output?: unknown }>;
       }
     ).events;
     const analyzeEvent = events.findLast(
-      (e) => e.type === "STAGE_COMPLETED" && e.stage === "analyze",
+      (e: any) => e.type === "STAGE_COMPLETED" && e.stage === "analyze",
     );
     const output = analyzeEvent?.output as
       | { needsClarification?: boolean }
@@ -31,13 +31,13 @@ export const clarifyStage: Stage = {
     const storeDir = path.join(config.workspace.rootDir, ".jira-acp");
 
     // Get questions from analyze stage output
-    const events = (
+    const events: any = (
       ctx.state as unknown as {
         events: Array<{ type: string; stage?: string; output?: unknown }>;
       }
     ).events;
-    const analyzeEvent = events.findLast(
-      (e) => e.type === "STAGE_COMPLETED" && e.stage === "analyze",
+    const analyzeEvent = events?.findLast(
+      (e: { type: string; stage?: string; output?: unknown }) => e.type === "STAGE_COMPLETED" && e.stage === "analyze",
     );
     const questions = (analyzeEvent?.output as { questions?: string[] })
       ?.questions ?? ["Please clarify the ticket requirements."];

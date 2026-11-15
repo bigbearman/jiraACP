@@ -113,6 +113,18 @@ async function handleAbort(ctx: Context): Promise<void> {
   }
 
   try {
+    const runDir = getRunDir(projectName, ticketKey);
+    if (fs.existsSync(path.join(runDir, "state.json"))) {
+      const state = new StateManager(runDir).current;
+      if (state.isAborted) {
+        await reply(ctx, `ℹ️ <b>${ticketKey}</b> already aborted.`);
+        return;
+      }
+      if (state.isCompleted) {
+        await reply(ctx, `ℹ️ <b>${ticketKey}</b> already completed.`);
+        return;
+      }
+    }
     const { abortPipeline } = await import("../../commands/abort.js");
     await abortPipeline(ticketKey, projectName, "Aborted via Telegram");
     await reply(ctx, `🛑 Pipeline for <b>${ticketKey}</b> aborted.`);
@@ -183,6 +195,10 @@ async function handleStatus(ctx: Context): Promise<void> {
       if (!fs.existsSync(path.join(runDir, "state.json"))) continue;
 
       const state = new StateManager(runDir).current;
+
+      // Show only active runs — aborted/completed are hidden unless user queries a specific ticket
+      if (!ticketKey && (state.isAborted || state.isCompleted)) continue;
+
       const stage =
         state.currentStage ??
         (state.isCompleted ? "done" : (state.failedStage ?? "—"));
