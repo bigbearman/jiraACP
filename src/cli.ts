@@ -226,12 +226,18 @@ program
 
 program
   .command("usage")
-  .description("Token cost report per project/month")
+  .description("Token cost report per project, ticket and stage")
   .option("--month <YYYY-MM>", "Filter by month")
   .option("--project <name>", "Filter by project")
-  .option("--verbose", "Show per-stage breakdown")
+  .option("--ticket <key>", "Filter by ticket key")
+  .option("--verbose", "Show per-stage breakdown under each ticket")
   .action(
-    async (opts: { month?: string; project?: string; verbose?: boolean }) => {
+    async (opts: {
+      month?: string;
+      project?: string;
+      ticket?: string;
+      verbose?: boolean;
+    }) => {
       const { showUsage } = await import("./commands/usage.js");
       await showUsage(opts);
     },
