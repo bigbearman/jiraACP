@@ -34,6 +34,11 @@ vi.mock("../integrations/telegram/notifier.js", () => ({
 vi.mock("../integrations/telegram/bot.js", () => ({
   initBot: vi.fn().mockResolvedValue(undefined),
 }));
+// Every merge waits for a human; approve so the review stage reaches mergePR
+vi.mock("../integrations/telegram/human-loop.js", () => ({
+  requestClarification: vi.fn().mockResolvedValue("answer"),
+  requestApproval: vi.fn().mockResolvedValue(true),
+}));
 vi.mock("../pipeline/runner.js", () => ({
   runAgent: vi
     .fn()
