@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: out of scope.** Not implemented.
+
 # Feature 07 — Learning Loop: Auto-Retry with Feedback
 
 > Priority: Tier 2 (high value) · Size: M · Sprint 5

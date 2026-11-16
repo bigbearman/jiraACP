@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: out of scope.** Not implemented; only the terminal `dashboard` command exists.
+
 # Feature 10 — Web Dashboard (Read-Only)
 
 > Priority: Tier 2 (visibility) · Size: M-L · Sprint 6

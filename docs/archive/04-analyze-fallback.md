@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: implemented** in `src/pipeline/stages/2-analyze.ts` (retry, regex, then `pipeline.analyzeFallbackScore`).
+
 # Feature 04 — Analyze Stage Fallback Strategy
 
 > Priority: Tier 1 (gap fill) · Size: XS · Sprint 4

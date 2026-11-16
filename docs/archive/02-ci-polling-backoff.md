@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: implemented** in `src/pipeline/ci-poller.ts`, called from the git stage.
+
 # Feature 02 — CI Status Polling with Exponential Backoff
 
 > Priority: Tier 1 (gap fill) · Size: S · Sprint 4

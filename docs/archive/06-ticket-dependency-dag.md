@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: out of scope.** The experimental `sprint` command contains a partial dependency-ordered runner; it is not maintained.
+
 # Feature 06 — Multi-Ticket Dependency DAG
 
 > Priority: Tier 2 (high value) · Size: M · Sprint 5

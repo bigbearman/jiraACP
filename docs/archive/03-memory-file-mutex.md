@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: implemented** with the isolated-files approach: each reviewer writes `review-logic.md` or `review-quality.md`. The `withFileLock` helper in `src/utils/file-lock.ts` exists but no stage uses it yet.
+
 # Feature 03 — Memory File Mutex for Concurrent Agents
 
 > Priority: Tier 1 (gap fill) · Size: XS · Sprint 4
