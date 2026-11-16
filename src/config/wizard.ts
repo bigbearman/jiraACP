@@ -108,6 +108,8 @@ export async function runWizard(
   // ── Deploy (optional) ─────────────────────────────────────────────────────
   const deployEnabled = await p.confirm({
     message: "Enable auto-deploy to dev server?",
+    // Deploy is opt-in; pressing Enter must not turn it on
+    initialValue: false,
   });
   if (p.isCancel(deployEnabled)) {
     p.cancel("Setup cancelled");
