@@ -1,12 +1,50 @@
 import pc from "picocolors";
 import { spawnSafe } from "../utils/process.js";
 import { configExists, loadConfig } from "../config/loader.js";
+import type { ProjectConfig } from "../config/schema.js";
 import axios from "axios";
 
-interface CheckResult {
+export interface CheckResult {
   name: string;
   ok: boolean;
   message: string;
+  // Passes, but is printed as a warning the user should read
+  warn?: boolean;
+}
+
+export function mergeGateChecks(config: ProjectConfig): CheckResult[] {
+  const autoMerge = config.github.autoMergeWithoutHumanApproval;
+  const timeoutAction =
+    config.telegram.humanInTheLoop.reviewApprovalTimeoutAction;
+  const results: CheckResult[] = [];
+
+  if (autoMerge) {
+    results.push({
+      name: "Human approval before merge",
+      ok: true,
+      warn: true,
+      message: `OFF — github.autoMergeWithoutHumanApproval is true; PRs with fewer than ${config.github.majorIssueThreshold} major review issue(s) merge with no human approval`,
+    });
+  } else {
+    results.push({
+      name: "Human approval before merge",
+      ok: true,
+      message: "required for every merge",
+    });
+  }
+
+  if (timeoutAction === "merge-anyway") {
+    results.push({
+      name: "Review approval timeout",
+      ok: true,
+      warn: true,
+      message: autoMerge
+        ? "merge-anyway — an unanswered approval request merges the PR"
+        : "merge-anyway is ignored while auto-merge is off; timeout aborts",
+    });
+  }
+
+  return results;
 }
 
 export async function runDoctor(
@@ -90,6 +128,9 @@ export async function runDoctor(
       ok: Boolean(config.telegram.botToken),
       message: config.telegram.botToken ? "set" : "empty",
     });
+
+    // 7. Merge gate
+    results.push(...mergeGateChecks(config));
   } catch (err) {
     results.push({ name: "Config load", ok: false, message: String(err) });
   }
@@ -99,15 +140,24 @@ export async function runDoctor(
 
 function printResults(results: CheckResult[]): void {
   for (const r of results) {
-    const icon = r.ok ? pc.green("✓") : pc.red("✗");
-    const name = r.ok ? pc.green(r.name) : pc.red(r.name);
+    const icon = !r.ok ? pc.red("✗") : r.warn ? pc.yellow("!") : pc.green("✓");
+    const name = !r.ok
+      ? pc.red(r.name)
+      : r.warn
+        ? pc.yellow(r.name)
+        : pc.green(r.name);
     console.log(`  ${icon}  ${name}  ${pc.gray(r.message)}`);
   }
 
   const failed = results.filter((r) => !r.ok);
+  const warned = results.filter((r) => r.ok && r.warn);
   console.log();
   if (failed.length === 0) {
-    console.log(pc.green("  All checks passed.\n"));
+    console.log(
+      warned.length === 0
+        ? pc.green("  All checks passed.\n")
+        : pc.yellow(`  All checks passed with ${warned.length} warning(s).\n`),
+    );
   } else {
     console.log(pc.red(`  ${failed.length} check(s) failed.\n`));
     process.exitCode = 1;
