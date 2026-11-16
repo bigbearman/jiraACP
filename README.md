@@ -1,6 +1,6 @@
 # jira-acp
 
-> AI-powered Jira pipeline CLI: Ticket → Code → Pull Request → Review → Deploy → Notify
+> Turn one Jira ticket into one reviewed pull request, with a person approving the merge and the cost of the ticket measured.
 
 [![CI](https://github.com/bigbearman/jiraACP/actions/workflows/ci.yml/badge.svg)](https://github.com/bigbearman/jiraACP/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
@@ -8,17 +8,23 @@
 
 ---
 
+`jiraACP` is a pipeline that takes a Jira ticket to **a reviewed pull request**. It is designed so that **a person approves every merge** and **the cost of each ticket is measured**. It shows how to fit an LLM into a delivery process a team already runs. It is not an autonomous ticket-to-production bot.
+
+The product direction, scope and principles are in [docs/PRODUCT.md](docs/PRODUCT.md). The code does not fully meet those two goals yet; [section 6](#6-known-limitations) says exactly where.
+
 ## 1. The problem
 
-Small teams lose a lot of time on routine Jira tickets. Someone has to read the ticket, work out what it means, write the change, open a pull request, review it, deploy it, and then update Jira. Most of that is coordination, not engineering.
+Small teams lose a lot of time on routine Jira tickets. Someone has to read the ticket, work out what it means, write the change, open a pull request, get it reviewed, and then update Jira. Most of that is coordination, not engineering. Handing it to an LLM agent only works if a person keeps control of what gets merged and can see what each ticket costs.
 
-`jiraACP` runs that loop for you. Give it a ticket key and it:
+Give `jiraACP` a ticket key and it:
 
 1. checks whether the ticket is clear enough to work on, and asks you on Telegram if it isn't,
 2. has Claude Code implement the change on a new branch,
 3. pushes the branch, opens a PR and waits for CI,
-4. runs two independent AI reviews of the PR, and asks you on Telegram to approve or reject when they find major issues,
-5. merges, optionally deploys and runs end-to-end tests, then updates Jira.
+4. runs two independent AI reviews of the PR, and asks you on Telegram to approve or reject (today only when the reviews find major issues, see [section 6](#6-known-limitations)),
+5. merges the PR and updates Jira.
+
+Deploy and end-to-end UI tests exist as optional stages, off by default, and are outside the core scope.
 
 Every step is written to an append-only event log, so a crashed run can be resumed and a finished run can be replayed.
 
@@ -41,8 +47,8 @@ flowchart LR
         Q --> K
         K --> G[5 Git / PR / CI]
         G --> R[6 Review]
-        R --> D[7 Deploy]
-        D --> T[8 Test]
+        R --> D[7 Deploy, optional]
+        D --> T[8 Test, optional]
         T --> N[9 Notify]
     end
 
@@ -132,14 +138,16 @@ No figures for time saved or ticket success rate are published, because none hav
 
 ## 6. Known limitations
 
+The first two items are where the code does not yet meet the principles in [docs/PRODUCT.md](docs/PRODUCT.md). Both are being worked on next.
+
+- **Not every merge needs a person yet.** If the two AI reviewers report fewer major issues than `github.majorIssueThreshold` (default 1), stage 6 merges the PR automatically. Until approval is mandatory by default, set the threshold to `0` to require approval for every PR. See [ADR-0002](docs/adr/0002-human-approval-via-telegram.md). *Planned:* approval required for every merge by default; auto-merge only behind an explicit opt-in flag.
+- **Cost per ticket is not measured yet.** The agent runs with `--output-format text`, so no stage reports token counts. As a result, `jiraACP usage` shows no data and `pipeline.maxCostUsdPerRun` never triggers. *Planned:* record model and token usage per stage, so `usage` reports cost per ticket and the cost limit stops a run. See [docs/token-cost.md](docs/token-cost.md).
 - **Only run against test repositories so far.** It has not been used on a production codebase or a real team backlog.
-- **PRs can be merged without a human.** If the two AI reviewers report fewer major issues than `github.majorIssueThreshold` (default 1), stage 6 merges the PR automatically. Set the threshold to `0` to require approval for every PR. See [ADR-0002](docs/adr/0002-human-approval-via-telegram.md).
-- **Token usage is not recorded.** The agent runs with `--output-format text`, so no stage reports token counts. As a result, `jiraACP usage` shows no data and `pipeline.maxCostUsdPerRun` never triggers.
 - **Model routing is a keyword heuristic.** Stage 4 switches to Opus when the ticket mentions two or more words such as `auth`, `payment`, `migration` or `schema`. Nothing else is configurable.
-- **Deploy and rollback commands are run without a shell and without arguments.** `deploy.command` must be a single executable, such as a script path, not `npm run deploy`.
-- **Some config fields are accepted but not used:** `workspace.allowedPaths`, `pipeline.failOnDeployFailure`, `pipeline.skipClarificationIfClear`, `notifyOnStages`.
+- **Deploy and UI tests are outside the core scope.** Both stages are off by default (`deploy.enabled`, `test.enabled`). When enabled, deploy and rollback commands are run without a shell and without arguments, so `deploy.command` must be a single executable, such as a script path, not `npm run deploy`.
+- **Some config fields are accepted but not used:** `workspace.allowedPaths`, `pipeline.failOnDeployFailure`, `pipeline.skipClarificationIfClear`, `notifyOnStages`. *Planned:* implement them or remove them from the schema.
+- **`npm run typecheck` reports errors** that the build does not catch, including in the `sprint` and `triage` commands. Treat `sprint`, `triage`, `dashboard` and `schedule` as experimental: they are outside the core scope. *Planned:* a clean typecheck in CI.
 - **Secrets are stored in plain text** in `~/.jira-acp/projects/<name>.json`. Keep that file private (`chmod 600`).
-- **`npm run typecheck` reports errors** that the build does not catch, including in the `sprint` and `triage` commands. Treat those two commands as experimental.
 
 ---
 
@@ -233,6 +241,7 @@ The state of each run is an append-only event log at `~/.jira-acp/runs/<project>
 
 ## Design decisions
 
+- [Product direction: scope, out of scope and principles](docs/PRODUCT.md)
 - [ADR-0001: Choose the Claude model per stage by cost](docs/adr/0001-model-selection-by-cost.md)
 - [ADR-0002: Human approval through Telegram](docs/adr/0002-human-approval-via-telegram.md)
 - [ADR-0003: Stop and report on failure](docs/adr/0003-stop-and-report-on-failure.md)
@@ -245,7 +254,7 @@ npm run build
 npm test
 ```
 
-`docs/dev-process/` holds the planning notes from the agent-assisted build of this tool.
+`docs/dev-process/` holds the planning notes from the agent-assisted build of this tool. `docs/archive/` holds earlier feature specs; they are kept for history and are not a roadmap.
 
 ## License
 
