@@ -95,6 +95,55 @@ describe("parseAgentResult", () => {
     expect(parsed?.usage).toBeNull();
   });
 
+  it("parses a real CLI result (v2.1.318, not logged in, no tokens spent)", () => {
+    // Captured from `claude --print --output-format json` with no credentials
+    const real = {
+      "type": "result",
+      "subtype": "success",
+      "is_error": true,
+      "result": "Not logged in · Please run /login",
+      "session_id": "00000000-0000-0000-0000-000000000000",
+      "total_cost_usd": 0,
+      "usage": {
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 0,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "",
+        "iterations": [],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "modelUsage": {},
+      "num_turns": 1,
+      "terminal_reason": "api_error"
+    };
+    const parsed = parseAgentResult(JSON.stringify(real), HAIKU);
+    expect(parsed?.isError).toBe(true);
+    expect(parsed?.text).toBe("Not logged in · Please run /login");
+    expect(parsed?.usage?.cliReportedCostUsd).toBe(0);
+    // Empty modelUsage → falls back to top-level usage under the requested model
+    expect(parsed?.usage?.byModel[HAIKU]).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      cliCostUsd: 0,
+    });
+  });
+
   it("returns null for non-JSON stdout", () => {
     expect(parseAgentResult("plain text answer", SONNET)).toBeNull();
     expect(parseAgentResult("[1,2]", SONNET)).toBeNull();

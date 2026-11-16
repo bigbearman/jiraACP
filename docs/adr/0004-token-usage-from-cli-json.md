@@ -44,5 +44,5 @@ All calls go through the Claude Code CLI rather than the API, because the code s
 
 - `jiraACP usage` reports cost per project, ticket and stage, and the cost guard can abort.
 - Stored costs reflect the prices on the day of the run. When a model ID changes in `runner.ts`, its price must be added to `pricing.ts`. A test fails if any ID in `MODEL_IDS` has no price.
-- Known gaps, listed in [docs/token-cost.md](../token-cost.md): cache writes are priced at the 5-minute rate because the CLI gives no 5m/1h split; data residency, Batch and fast-mode pricing are not modelled; triage usage is not persisted; a call still running when its stage times out is lost; the guard runs between stages, so it cannot stop one expensive stage halfway.
+- Known gaps, listed in [docs/token-cost.md](../token-cost.md): cache writes are priced at the 5-minute rate because `modelUsage` gives no 5m/1h split (the top-level `usage` does, but only for the main loop); data residency, Batch and fast-mode pricing are not modelled; triage usage is not persisted; a call still running when its stage times out is lost; the guard runs between stages, so it cannot stop one expensive stage halfway.
 - If the CLI output is not JSON, `runAgent()` still returns the raw text and logs a warning, but that call's cost is lost. This is the trade-off for not failing a run over a reporting problem.

@@ -81,7 +81,7 @@ The raw records are in `~/.jira-acp/runs/<project>/<ticket>/state.json`.
 ## Known limits
 
 - **Estimates, not a bill.** Costs are API list prices times reported tokens. With a Claude subscription login, the CLI still reports tokens, but what you actually pay depends on your plan.
-- **Cache writes are priced at the 5-minute rate.** The CLI reports one cache-write figure per model, with no 5-minute/1-hour split. If 1-hour caching is enabled (`ENABLE_PROMPT_CACHING_1H`, or a subscription that uses it), cache writes cost up to 1.6× what is shown.
+- **Cache writes are priced at the 5-minute rate.** The per-model `modelUsage` has one cache-write figure, with no 5-minute/1-hour split. The top-level `usage` has the split, but it covers only the main loop and names no model, so it is not used for pricing. If 1-hour caching is enabled (`ENABLE_PROMPT_CACHING_1H`, or a subscription that uses it), cache writes cost up to 1.6× what is shown.
 - **Not modelled:** data residency (`inference_geo: "us"`, 1.1×), Batch discounts, fast mode and per-request tool fees such as web search.
 - **Triage** (`jiraACP triage`) runs the analyze stage outside a pipeline run, so its tokens are not written to any state log.
 - **Unparseable output.** If the CLI output is not JSON (for example an old CLI version), the call still works, but its usage is lost and a warning is logged.

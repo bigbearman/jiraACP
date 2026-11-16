@@ -26,8 +26,8 @@ export interface ModelPricing {
  * a price from a neighbouring model.
  *
  * Cache writes use the 5-minute rate: the Claude CLI defaults to the 5-minute
- * TTL with API-key auth and reports one `cacheCreationInputTokens` figure per
- * model, without a 5m/1h split.
+ * TTL with API-key auth, and its per-model `modelUsage` reports one
+ * `cacheCreationInputTokens` figure without a 5m/1h split.
  */
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-haiku-4-5-20251001": {
