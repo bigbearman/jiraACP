@@ -2,6 +2,7 @@
 
 > AI-powered Jira pipeline CLI: Ticket → Code → GitHub → Deploy → Notify
 
+[![CI](https://github.com/bigbearman/jiraACP/actions/workflows/ci.yml/badge.svg)](https://github.com/bigbearman/jiraACP/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/jira-acp.svg)](https://www.npmjs.com/package/@jiraacp/cli)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
