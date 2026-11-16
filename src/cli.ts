@@ -12,7 +12,7 @@ const pkg = JSON.parse(
 // When spawned by startDaemon(), skip CLI parsing and go straight to serve.
 const daemonIdx = process.argv.indexOf("--daemon-child");
 if (daemonIdx !== -1) {
-  const port = parseInt(process.argv[daemonIdx + 1] ?? "3100", 10);
+  const port = parseInt(process.argv[daemonIdx + 1] ?? "3110", 10);
   const { startServe } = await import("./commands/serve.js");
   await startServe(port);
   process.exit(0);
@@ -417,7 +417,7 @@ scheduleCmd
 program
   .command("serve")
   .description("Start webhook server in foreground (for dev/docker)")
-  .option("--port <n>", "Port number", "3100")
+  .option("--port <n>", "Port number", "3110")
   .action(async (opts: { port: string }) => {
     const { startServe } = await import("./commands/serve.js");
     await startServe(Number(opts.port));
@@ -428,7 +428,7 @@ program
 program
   .command("start")
   .description("Start jiraACP server as background daemon")
-  .option("--port <n>", "Port number", "3100")
+  .option("--port <n>", "Port number", "3110")
   .action(async (opts: { port: string }) => {
     const { startDaemon, getLogFile } = await import("./utils/daemon.js");
     const result = startDaemon(Number(opts.port));
@@ -459,7 +459,7 @@ program
 program
   .command("restart")
   .description("Restart the background daemon")
-  .option("--port <n>", "Port number", "3100")
+  .option("--port <n>", "Port number", "3110")
   .action(async (opts: { port: string }) => {
     const { stopDaemon, startDaemon, getLogFile } =
       await import("./utils/daemon.js");

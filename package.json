@@ -26,12 +26,15 @@
     "version:date": "node scripts/version-date.mjs",
     "release": "npm run build && npm run version:date && npm publish",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@clack/prompts": "^0.9.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@octokit/rest": "^21.0.0",
-    "@clack/prompts": "^0.9.0",
     "axios": "^1.7.0",
     "commander": "^12.0.0",
     "grammy": "^1.30.0",
@@ -41,8 +44,10 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^4.1.2",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.4"
   },
   "keywords": [
     "jira",

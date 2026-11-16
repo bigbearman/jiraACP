@@ -2,9 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import axios from "axios";
 import type { Context } from "grammy";
-import { getBot } from "./bot.js";
+import { getBot, canControl } from "./bot.js";
 import { archiveTopic } from "./topic-manager.js";
 import { setVerbosity, type Verbosity } from "./prefs.js";
+import { escapeHtml, splitHtmlByLines, wrapLines } from "../../utils/html.js";
 import { listProjects, loadConfig, HOME_DIR } from "../../config/loader.js";
 import { StateManager, getRunDir } from "../../pipeline/state.js";
 
@@ -54,26 +55,65 @@ async function reply(ctx: Context, text: string): Promise<void> {
   await ctx.reply(text, { parse_mode: "HTML" });
 }
 
-// ── Command handlers ──────────────────────────────────────────────────────────
+const errorText = (err: unknown): string =>
+  escapeHtml(err instanceof Error ? err.message : String(err));
 
-async function handleRun(ctx: Context): Promise<void> {
-  const args = parseArgs(ctx.message?.text ?? "", "run");
-  const ticketKey = args[0];
-  const projectArg = args[1];
+// Ticket keys end up in file paths and Jira URLs, so only the Jira shape is accepted
+const TICKET_KEY = /^[A-Z][A-Z0-9_]*-\d+$/i;
 
-  if (!ticketKey) {
-    await reply(ctx, "Usage: /run PROJ-123 [project]");
-    return;
+const VERBOSITY_LEVELS: Verbosity[] = ["low", "medium", "high"];
+const isVerbosity = (value: string | undefined): value is Verbosity =>
+  VERBOSITY_LEVELS.some((level) => level === value);
+
+interface Target {
+  ticketKey: string;
+  projectName: string;
+}
+
+/**
+ * Validates "<ticket> [project]" arguments. Replies with the problem and
+ * returns null when they are unusable.
+ */
+async function resolveTarget(
+  ctx: Context,
+  command: string,
+): Promise<Target | null> {
+  const [rawKey, projectArg] = parseArgs(ctx.message?.text ?? "", command);
+  // Jira keys are case-insensitive; run dirs and locks are not
+  const ticketKey = rawKey?.toUpperCase();
+
+  if (!ticketKey || !TICKET_KEY.test(ticketKey)) {
+    await reply(ctx, `Usage: /${command} PROJ-123 [project]`);
+    return null;
+  }
+  if (projectArg && !listProjects().includes(projectArg)) {
+    await reply(ctx, `Unknown project: ${escapeHtml(projectArg)}`);
+    return null;
   }
 
   const projectName = projectArg ?? findProjectForTicket(ticketKey);
   if (!projectName) {
     await reply(
       ctx,
-      `Cannot determine project for <b>${ticketKey}</b>. Specify: /run ${ticketKey} &lt;project&gt;`,
+      `Cannot determine project for <b>${ticketKey}</b>. Specify: /${command} ${ticketKey} &lt;project&gt;`,
     );
-    return;
+    return null;
   }
+  // The bot is shared by all projects: being allowed in one of them does not
+  // grant control over another.
+  if (!canControl(ctx, projectName)) {
+    await reply(ctx, `Not allowed to control <b>${escapeHtml(projectName)}</b>.`);
+    return null;
+  }
+  return { ticketKey, projectName };
+}
+
+// ── Command handlers ──────────────────────────────────────────────────────────
+
+async function handleRun(ctx: Context): Promise<void> {
+  const target = await resolveTarget(ctx, "run");
+  if (!target) return;
+  const { ticketKey, projectName } = target;
 
   await reply(
     ctx,
@@ -85,55 +125,50 @@ async function handleRun(ctx: Context): Promise<void> {
       const { runPipeline } = await import("../../pipeline/orchestrator.js");
       const config = loadConfig(projectName);
       await runPipeline(ticketKey, config);
-    } catch {
-      // errors are sent via notifier inside the pipeline
+    } catch (err) {
+      // Pipeline-internal errors are sent via notifier.
+      // Only catch setup errors (e.g. bad config) that escape the orchestrator.
+      await reply(
+        ctx,
+        `❌ Pipeline failed to start: ${errorText(err)}`,
+      ).catch(() => undefined);
     }
   });
 }
 
 async function handleAbort(ctx: Context): Promise<void> {
-  const args = parseArgs(ctx.message?.text ?? "", "abort");
-  const ticketKey = args[0];
-  const projectArg = args[1];
-
-  if (!ticketKey) {
-    await reply(ctx, "Usage: /abort PROJ-123 [project]");
-    return;
-  }
-
-  const projectName = projectArg ?? findProjectForTicket(ticketKey);
-  if (!projectName) {
-    await reply(ctx, `Cannot determine project for <b>${ticketKey}</b>.`);
-    return;
-  }
+  const target = await resolveTarget(ctx, "abort");
+  if (!target) return;
+  const { ticketKey, projectName } = target;
 
   try {
+    const runDir = getRunDir(projectName, ticketKey);
+    if (fs.existsSync(path.join(runDir, "state.json"))) {
+      const state = new StateManager(runDir).current;
+      if (state.isAborted) {
+        await reply(ctx, `ℹ️ <b>${ticketKey}</b> already aborted.`);
+        return;
+      }
+      if (state.isCompleted) {
+        await reply(ctx, `ℹ️ <b>${ticketKey}</b> already completed.`);
+        return;
+      }
+    }
     const { abortPipeline } = await import("../../commands/abort.js");
     await abortPipeline(ticketKey, projectName, "Aborted via Telegram");
     await reply(ctx, `🛑 Pipeline for <b>${ticketKey}</b> aborted.`);
   } catch (err) {
     await reply(
       ctx,
-      `❌ Abort failed: ${err instanceof Error ? err.message : String(err)}`,
+      `❌ Abort failed: ${errorText(err)}`,
     );
   }
 }
 
 async function handleResume(ctx: Context): Promise<void> {
-  const args = parseArgs(ctx.message?.text ?? "", "resume");
-  const ticketKey = args[0];
-  const projectArg = args[1];
-
-  if (!ticketKey) {
-    await reply(ctx, "Usage: /resume PROJ-123 [project]");
-    return;
-  }
-
-  const projectName = projectArg ?? findProjectForTicket(ticketKey);
-  if (!projectName) {
-    await reply(ctx, `Cannot determine project for <b>${ticketKey}</b>.`);
-    return;
-  }
+  const target = await resolveTarget(ctx, "resume");
+  if (!target) return;
+  const { ticketKey, projectName } = target;
 
   await reply(
     ctx,
@@ -153,7 +188,11 @@ async function handleResume(ctx: Context): Promise<void> {
 
 async function handleStatus(ctx: Context): Promise<void> {
   const args = parseArgs(ctx.message?.text ?? "", "status");
-  const ticketKey = args[0];
+  const ticketKey = args[0]?.toUpperCase();
+  if (ticketKey && !TICKET_KEY.test(ticketKey)) {
+    await reply(ctx, "Usage: /status [PROJ-123]");
+    return;
+  }
 
   const projects = listProjects();
   if (projects.length === 0) {
@@ -178,6 +217,10 @@ async function handleStatus(ctx: Context): Promise<void> {
       if (!fs.existsSync(path.join(runDir, "state.json"))) continue;
 
       const state = new StateManager(runDir).current;
+
+      // Show only active runs — aborted/completed are hidden unless user queries a specific ticket
+      if (!ticketKey && (state.isAborted || state.isCompleted)) continue;
+
       const stage =
         state.currentStage ??
         (state.isCompleted ? "done" : (state.failedStage ?? "—"));
@@ -201,20 +244,9 @@ async function handleStatus(ctx: Context): Promise<void> {
 }
 
 async function handleLogs(ctx: Context): Promise<void> {
-  const args = parseArgs(ctx.message?.text ?? "", "logs");
-  const ticketKey = args[0];
-  const projectArg = args[1];
-
-  if (!ticketKey) {
-    await reply(ctx, "Usage: /logs PROJ-123 [project]");
-    return;
-  }
-
-  const projectName = projectArg ?? findProjectForTicket(ticketKey);
-  if (!projectName) {
-    await reply(ctx, `Cannot determine project for <b>${ticketKey}</b>.`);
-    return;
-  }
+  const target = await resolveTarget(ctx, "logs");
+  if (!target) return;
+  const { ticketKey, projectName } = target;
 
   const runDir = getRunDir(projectName, ticketKey);
   const statePath = path.join(runDir, "state.json");
@@ -248,11 +280,11 @@ async function handleLogs(ctx: Context): Promise<void> {
   for (const e of events) {
     const time = new Date(e.timestamp).toLocaleTimeString();
     const detail = e.stage
-      ? ` [${e.stage}]`
+      ? ` [${escapeHtml(e.stage)}]`
       : e.reason
-        ? ` — ${e.reason.slice(0, 60)}`
+        ? ` — ${escapeHtml(e.reason.slice(0, 60))}`
         : "";
-    lines.push(`<code>${time}</code> ${e.type}${detail}`);
+    lines.push(`<code>${time}</code> ${escapeHtml(e.type)}${detail}`);
   }
 
   await reply(ctx, lines.join("\n"));
@@ -285,7 +317,11 @@ async function handleTickets(ctx: Context): Promise<void> {
   const projectName =
     projectArg ?? (projects.length === 1 ? projects[0] : null);
 
-  if (!projectName) {
+  if (
+    !projectName ||
+    !projects.includes(projectName) ||
+    !canControl(ctx, projectName)
+  ) {
     await reply(
       ctx,
       `Specify project: /tickets &lt;project&gt;\nAvailable: ${projects.join(", ")}`,
@@ -345,14 +381,14 @@ async function handleTickets(ctx: Context): Promise<void> {
       `<b>${projectName}</b> — ${issues.length} open tickets\n`,
     ];
     for (const [version, vIssues] of grouped) {
-      lines.push(`<b>📦 ${version}</b> (${vIssues.length})`);
+      lines.push(`<b>📦 ${escapeHtml(version)}</b> (${vIssues.length})`);
       for (const issue of vIssues) {
         const status = issue.fields.status.name;
         const icon = STATUS_ICON[status] ?? "⬜";
         const prio = issue.fields.priority?.name ?? "";
         const assignee = issue.fields.assignee?.displayName ?? "Unassigned";
         lines.push(
-          `${icon} <b>${issue.key}</b> ${issue.fields.summary.slice(0, 55)}\n   ${status} · ${prio} · ${assignee}`,
+          `${icon} <b>${escapeHtml(issue.key)}</b> ${escapeHtml(issue.fields.summary.slice(0, 55))}\n   ${escapeHtml(`${status} · ${prio} · ${assignee}`)}`,
         );
       }
       lines.push("");
@@ -362,78 +398,139 @@ async function handleTickets(ctx: Context): Promise<void> {
   } catch (err) {
     await reply(
       ctx,
-      `❌ Jira error: ${err instanceof Error ? err.message : String(err)}`,
+      `❌ Jira error: ${errorText(err)}`,
     );
   }
 }
 
 async function handleTicket(ctx: Context): Promise<void> {
-  const args = parseArgs(ctx.message?.text ?? "", "ticket");
-  const ticketKey = args[0];
-
-  if (!ticketKey) {
-    await reply(ctx, "Usage: /ticket PROJ-123");
-    return;
-  }
-
-  const projectName = findProjectForTicket(ticketKey);
-  if (!projectName) {
-    await reply(ctx, `Cannot determine project for <b>${ticketKey}</b>.`);
-    return;
-  }
+  const target = await resolveTarget(ctx, "ticket");
+  if (!target) return;
+  const { ticketKey, projectName } = target;
 
   try {
     const { client, cfg } = jiraClientFrom(projectName);
-    const { data } = await client.get(`/issue/${ticketKey}`);
+    const { data } = await client.get(`/issue/${ticketKey}`, {
+      params: {
+        fields: [
+          "summary",
+          "status",
+          "priority",
+          "assignee",
+          "description",
+          "fixVersions",
+          cfg.jira.acceptanceCriteriaField ?? "customfield_10016",
+        ].join(","),
+      },
+    });
 
-    function extractText(node: unknown): string {
+    // Parse Atlassian Document Format (ADF) → plain text preserving structure
+    function adfToText(node: unknown, depth = 0): string {
       if (!node) return "";
-      if (typeof node === "string") return node;
-      const n = node as { type?: string; text?: string; content?: unknown[] };
-      if (n.type === "text") return n.text ?? "";
-      if (n.content) return n.content.map(extractText).join(" ");
-      return "";
+      if (typeof node === "string") return escapeHtml(node);
+
+      const n = node as {
+        type?: string;
+        text?: string;
+        content?: unknown[];
+        attrs?: { level?: number; order?: number };
+        marks?: Array<{ type: string }>;
+      };
+
+      switch (n.type) {
+        case "text": {
+          let t = escapeHtml(n.text ?? "");
+          if (n.marks?.some((m) => m.type === "strong")) t = wrapLines(t, "b");
+          if (n.marks?.some((m) => m.type === "em")) t = wrapLines(t, "i");
+          if (n.marks?.some((m) => m.type === "code")) t = wrapLines(t, "code");
+          return t;
+        }
+        case "paragraph":
+          return (
+            (n.content?.map((c) => adfToText(c, depth)).join("") ?? "") + "\n"
+          );
+        case "heading": {
+          const level = n.attrs?.level ?? 1;
+          const prefix = level <= 2 ? "▸ " : "  ";
+          return (
+            prefix +
+            (n.content?.map((c) => adfToText(c, depth)).join("") ?? "") +
+            "\n"
+          );
+        }
+        case "bulletList":
+          return n.content?.map((c) => adfToText(c, depth + 1)).join("") ?? "";
+        case "orderedList":
+          return (
+            n.content
+              ?.map((c, i) =>
+                adfToText(c, depth + 1).replace(
+                  /^•/,
+                  `${(n.attrs?.order ?? 1) + i}.`,
+                ),
+              )
+              .join("") ?? ""
+          );
+        case "listItem": {
+          const indent = "  ".repeat(depth - 1);
+          const text =
+            n.content
+              ?.map((c) => adfToText(c, depth))
+              .join("")
+              .trimEnd() ?? "";
+          return `${indent}• ${text}\n`;
+        }
+        case "codeBlock":
+          return (
+            wrapLines(
+              n.content?.map((c) => adfToText(c, depth)).join("") ?? "",
+              "code",
+            ) + "\n"
+          );
+        case "blockquote":
+          return (
+            n.content?.map((c) => "  " + adfToText(c, depth)).join("") ?? ""
+          );
+        case "rule":
+          return "─────\n";
+        case "hardBreak":
+          return "\n";
+        case "doc":
+        default:
+          return n.content?.map((c) => adfToText(c, depth)).join("") ?? "";
+      }
     }
 
-    const description = extractText(data.fields.description).slice(0, 400);
-    const ac = extractText(
+    const description = adfToText(data.fields.description).trim();
+    const ac = adfToText(
       data.fields[cfg.jira.acceptanceCriteriaField ?? "customfield_10016"],
-    ).slice(0, 300);
+    ).trim();
 
     const lines = [
-      `<b>${data.key}</b> — ${data.fields.summary}`,
-      `Status: ${data.fields.status.name}`,
-      `Priority: ${data.fields.priority?.name ?? "—"}`,
-      `Assignee: ${data.fields.assignee?.displayName ?? "Unassigned"}`,
+      `<b>${escapeHtml(String(data.key))}</b> — ${escapeHtml(String(data.fields.summary ?? ""))}`,
+      `Status: ${escapeHtml(String(data.fields.status?.name ?? "—"))}`,
+      `Priority: ${escapeHtml(String(data.fields.priority?.name ?? "—"))}`,
+      `Assignee: ${escapeHtml(String(data.fields.assignee?.displayName ?? "Unassigned"))}`,
     ];
+    if (description) lines.push("", "<b>Description</b>", description);
+    if (ac) lines.push("", "<b>Acceptance Criteria</b>", ac);
 
-    if (description) lines.push(`\n<b>Description</b>\n${description}`);
-    if (ac) lines.push(`\n<b>Acceptance Criteria</b>\n${ac}`);
-
-    await reply(ctx, lines.join("\n"));
+    // Telegram caps a message at 4096 chars: long tickets go out in several
+    for (const chunk of splitHtmlByLines(lines.join("\n"))) {
+      await reply(ctx, chunk);
+    }
   } catch (err) {
     await reply(
       ctx,
-      `❌ Jira error: ${err instanceof Error ? err.message : String(err)}`,
+      `❌ Jira error: ${errorText(err)}`,
     );
   }
 }
 
 async function handleArchive(ctx: Context): Promise<void> {
-  const args = parseArgs(ctx.message?.text ?? "", "archive");
-  const ticketKey = args[0];
-  const projectArg = args[1];
-
-  if (!ticketKey) {
-    await reply(ctx, "Usage: /archive PROJ-123 [project]");
-    return;
-  }
-
-  const projectName = projectArg ?? findProjectForTicket(ticketKey);
-  if (!projectName) {
-    await reply(ctx, `Cannot determine project for <b>${ticketKey}</b>.`);
-    return;
-  }
+  const target = await resolveTarget(ctx, "archive");
+  if (!target) return;
+  const { ticketKey, projectName } = target;
 
   const chatId = ctx.chat?.id;
   if (!chatId) return;
@@ -446,7 +543,7 @@ async function handleArchive(ctx: Context): Promise<void> {
   } catch (err) {
     await reply(
       ctx,
-      `❌ Archive failed: ${err instanceof Error ? err.message : String(err)}`,
+      `❌ Archive failed: ${errorText(err)}`,
     );
   }
 }
@@ -456,10 +553,9 @@ async function handleVerbosity(ctx: Context): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
 
-  const level = args[0] as Verbosity | undefined;
-  const valid: Verbosity[] = ["low", "medium", "high"];
+  const level = args[0];
 
-  if (!level || !valid.includes(level)) {
+  if (!isVerbosity(level)) {
     await ctx.reply("Choose verbosity level:", {
       reply_markup: {
         inline_keyboard: [
@@ -501,7 +597,8 @@ export function registerBotCommands(token: string): void {
     const data = ctx.callbackQuery.data ?? "";
     if (!data.startsWith("verbosity:")) return;
 
-    const level = data.slice("verbosity:".length) as Verbosity;
+    const level = data.slice("verbosity:".length);
+    if (!isVerbosity(level)) return;
     const chatId = ctx.chat?.id;
     if (chatId) setVerbosity(chatId, level);
 

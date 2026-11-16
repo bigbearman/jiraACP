@@ -3,6 +3,7 @@ import { runAgentsParallel } from "../runner.js";
 import {
   getContextFilesForStage,
   writeReviewFeedback,
+  writeReviewAgentOutput,
 } from "../../memory/context-builder.js";
 import { requestApproval } from "../../integrations/telegram/human-loop.js";
 
@@ -23,6 +24,9 @@ export const reviewStage: Stage = {
       "review",
     );
     ctx.logger.info({ ticketKey, prNumber }, "Running parallel review agents");
+    await ctx.telegram
+      .updateDetail(`Running parallel review agents on PR #${prNumber}…`)
+      .catch(() => undefined);
 
     const logicPrompt = `Review PR #${prNumber} for ticket ${ticketKey}.
 Focus on: Does the implementation correctly satisfy the acceptance criteria?
@@ -38,6 +42,7 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
       contextFiles,
       timeoutMs: (config.pipeline?.stageTimeouts?.review ?? 600_000) / 2,
       stallTimeoutMs: 120_000,
+      logger: ctx.logger,
     };
 
     const [logicRaw, qualityRaw] = ctx.dryRun
@@ -46,6 +51,10 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
           { ...agentOpts, prompt: logicPrompt },
           { ...agentOpts, prompt: qualityPrompt },
         );
+
+    // Keep each agent's raw output for debugging
+    writeReviewAgentOutput(memoryDir, "logic", logicRaw);
+    writeReviewAgentOutput(memoryDir, "quality", qualityRaw);
 
     const issues = [...parseIssues(logicRaw), ...parseIssues(qualityRaw)];
 
@@ -59,11 +68,20 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
       autoResolved: !needsHumanApproval,
     });
 
+    const reviewSummary =
+      issues.length === 0
+        ? "No issues found"
+        : `${majorCount} major, ${issues.length - majorCount} minor issue(s)`;
+    await ctx.telegram.updateDetail(reviewSummary).catch(() => undefined);
+
     if (needsHumanApproval) {
       ctx.logger.warn(
         { ticketKey, majorCount },
         "Major issues found — requesting human approval via Telegram",
       );
+      await ctx.telegram
+        .updateDetail(`⚠️ ${reviewSummary} — waiting for human approval…`)
+        .catch(() => undefined);
 
       ctx.state.emit({
         type: "HUMAN_APPROVAL_REQUESTED",
@@ -82,6 +100,13 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
               timeoutMs: hil?.reviewApprovalTimeoutMs ?? 86_400_000,
               onTimeout: hil?.reviewApprovalTimeoutAction ?? "abort",
               topicId: config.telegram.topicId,
+              reminderIntervalMs: hil?.reminderIntervalMs,
+              maxReminders: hil?.maxReminders,
+              onReminder: (count) =>
+                ctx.state.emit({
+                  type: "APPROVAL_REMINDER_SENT",
+                  count,
+                }),
             },
           );
 

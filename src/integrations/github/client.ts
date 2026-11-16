@@ -1,5 +1,14 @@
 import { Octokit } from "@octokit/rest";
 
+export interface CheckRun {
+  id: number;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
 export interface GitHubClient {
   createBranch(base: string, branch: string): Promise<void>;
   createPR(opts: {
@@ -9,6 +18,8 @@ export interface GitHubClient {
     base: string;
     draft?: boolean;
   }): Promise<number>;
+  /** Returns the PR number of the open PR for the given branch, or null if none. */
+  findOpenPR(branchName: string): Promise<number | null>;
   mergePR(
     prNumber: number,
     strategy: "squash" | "merge" | "rebase",
@@ -18,6 +29,8 @@ export interface GitHubClient {
   getRunStatus(
     branch: string,
   ): Promise<"pending" | "success" | "failure" | "unknown">;
+  getCheckRuns(sha: string): Promise<CheckRun[]>;
+  getCheckRunLog(checkRunId: number): Promise<string>;
 }
 
 export function createGitHubClient(
@@ -80,6 +93,21 @@ export function createGitHubClient(
       });
     },
 
+    async findOpenPR(branchName) {
+      try {
+        const { data } = await octokit.pulls.list({
+          owner,
+          repo,
+          head: `${owner}:${branchName}`,
+          state: "open",
+          per_page: 1,
+        });
+        return data[0]?.number ?? null;
+      } catch {
+        return null;
+      }
+    },
+
     async getPR(prNumber) {
       const { data } = await octokit.pulls.get({
         owner,
@@ -102,6 +130,37 @@ export function createGitHubClient(
       } catch {
         return "unknown";
       }
+    },
+
+    async getCheckRuns(sha) {
+      const runs = await octokit.paginate(octokit.checks.listForRef, {
+        owner,
+        repo,
+        ref: sha,
+        per_page: 100,
+      });
+      return runs.map((run) => ({
+        id: run.id,
+        name: run.name,
+        status: run.status,
+        conclusion: run.conclusion ?? null,
+        startedAt: run.started_at ?? null,
+        completedAt: run.completed_at ?? null,
+      }));
+    },
+
+    async getCheckRunLog(checkRunId) {
+      const { data } = await octokit.checks.get({
+        owner,
+        repo,
+        check_run_id: checkRunId,
+      });
+      const output = data.output;
+      const text = output.text ?? output.summary ?? "";
+      if (text.length > 2000) {
+        return text.slice(0, 2000);
+      }
+      return text;
     },
   };
 }

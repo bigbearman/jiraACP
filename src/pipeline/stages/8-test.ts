@@ -1,6 +1,8 @@
 import type { Stage, PipelineContext, StageOutput } from "./types.js";
 import { runAgent } from "../runner.js";
 import { getContextFilesForStage } from "../../memory/context-builder.js";
+import { attemptRollback } from "../rollback.js";
+import { escapeHtml } from "../../utils/html.js";
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
@@ -44,6 +46,11 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
           { ticketKey, attempt: attempt + 1 },
           "Running UI tests",
         );
+        await ctx.telegram
+          .updateDetail(
+            `Running UI tests — attempt ${attempt + 1}/${retries + 1}…`,
+          )
+          .catch(() => undefined);
 
         const raw = ctx.dryRun
           ? '{"passed":true,"summary":"dry-run","failures":[]}'
@@ -54,6 +61,7 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
               contextFiles,
               timeoutMs: testConfig.timeoutMs ?? 300_000,
               stallTimeoutMs: 60_000,
+              logger: ctx.logger,
             });
 
         const match = raw.match(/\{[\s\S]*\}/);
@@ -65,7 +73,8 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
           failures: string[];
         };
 
-        if (result.passed) {
+        // Agent output is untrusted: only a real boolean true counts as a pass
+        if (result.passed === true) {
           ctx.logger.info({ ticketKey }, "UI tests passed");
           return { passed: true, summary: result.summary };
         }
@@ -81,12 +90,39 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
     }
 
     const failOnTest = config.pipeline?.failOnTestFailure ?? false;
-    if (failOnTest)
+    if (failOnTest) {
+      // Only roll back a deploy that this run actually performed
+      if (config.deploy.rollbackCommand && wasDeployed(ctx)) {
+        if (ctx.dryRun) {
+          ctx.logger.info(
+            { ticketKey },
+            "Would execute rollback on test failure",
+          );
+        } else {
+          await attemptRollback(ctx, "test");
+        }
+      }
       throw lastError ?? new Error("Tests failed after all retries");
+    }
 
-    await ctx.telegram.send(
-      `⚠️ <b>${ticketKey}</b> UI tests failed after ${retries + 1} attempts. Continuing pipeline.\n${lastError?.message}`,
-    );
+    try {
+      await ctx.telegram.send(
+        `⚠️ <b>${ticketKey}</b> UI tests failed after ${retries + 1} attempts. Continuing pipeline.\n${escapeHtml(lastError?.message ?? "")}`,
+      );
+    } catch (err) {
+      // Best-effort notice: the pipeline continues either way
+      ctx.logger.warn({ ticketKey, err }, "Could not send test failure notice");
+    }
     return { passed: false, summary: lastError?.message ?? "Tests failed" };
   },
 };
+
+function wasDeployed(ctx: PipelineContext): boolean {
+  const output = ctx.state.lastStageOutput("deploy");
+  return (
+    typeof output === "object" &&
+    output !== null &&
+    "deployed" in output &&
+    output.deployed === true
+  );
+}

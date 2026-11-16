@@ -4,7 +4,7 @@ import type { JiraClient } from "../integrations/jira/client.js";
 import { StateManager, getRunDir, getLockPath, getMemoryDir } from "./state.js";
 import { acquireLock } from "../utils/lock.js";
 import { createLogger } from "../utils/logger.js";
-import { getClient as getJiraClient } from "../integrations/jira/client.js";
+import { getClientFromConfig } from "../integrations/jira/client.js";
 import { createGitHubClient } from "../integrations/github/client.js";
 import { createTelegramNotifier } from "../integrations/telegram/notifier.js";
 import { checkCostLimit } from "./cost-guard.js";
@@ -66,7 +66,7 @@ export async function runPipeline(
     memoryDir,
     dryRun: opts.dryRun ?? false,
     logger,
-    jira: getJiraClient(config.jira.instance) as JiraClient,
+    jira: getClientFromConfig(config.jira) as JiraClient,
     github: createGitHubClient(
       config.github.token,
       config.github.owner,
@@ -116,7 +116,7 @@ export async function runPipeline(
       await ctx.telegram.notifyStageStarted(stage.id).catch(() => undefined);
 
       try {
-        const timeout = config.pipeline?.stageTimeouts?.[stage.id];
+        const timeout = stageTimeoutMs(config, stage.id);
         const output = timeout
           ? await withTimeout(stage.run(ctx), timeout)
           : await stage.run(ctx);
@@ -167,6 +167,9 @@ export async function runPipeline(
             reason: message,
           });
           logger.warn({ stage: stage.id }, `Skipped: ${message}`);
+          await ctx.telegram
+            .notifyStageSkipped(stage.id)
+            .catch(() => undefined);
           return;
         }
 
@@ -229,6 +232,18 @@ function filterStages(stages: Stage[], from?: StageId, to?: StageId): Stage[] {
     fromIdx < 0 ? 0 : fromIdx,
     toIdx < 0 ? stages.length : toIdx + 1,
   );
+}
+
+function stageTimeoutMs(
+  config: ProjectConfig,
+  stageId: StageId,
+): number | undefined {
+  const base = config.pipeline?.stageTimeouts?.[stageId];
+  // CI polling runs inside the git stage, so its budget comes on top
+  if (base && stageId === "git" && config.github.waitForCI !== false) {
+    return base + (config.github.ciTimeoutMs ?? 1_800_000);
+  }
+  return base;
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

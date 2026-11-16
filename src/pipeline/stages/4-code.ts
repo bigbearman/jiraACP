@@ -42,6 +42,10 @@ Workspace: ${config.workspace.rootDir}
 ${config.workspace.buildCommand ? `Build command: ${config.workspace.buildCommand}` : ""}
 `.trim();
 
+    await ctx.telegram
+      .updateDetail(`Running code agent on branch <code>${branchName}</code>…`)
+      .catch(() => undefined);
+
     if (!ctx.dryRun) {
       await runAgent({
         prompt,
@@ -50,6 +54,7 @@ ${config.workspace.buildCommand ? `Build command: ${config.workspace.buildComman
         contextFiles,
         timeoutMs: config.pipeline?.stageTimeouts?.code ?? 1_800_000,
         stallTimeoutMs: config.pipeline?.agentStallTimeoutMs ?? 300_000,
+        logger: ctx.logger,
       });
     }
 

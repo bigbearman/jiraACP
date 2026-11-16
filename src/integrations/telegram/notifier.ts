@@ -2,6 +2,7 @@ import type { StageId } from "../../config/schema.js";
 import { getBot } from "./bot.js";
 import { getOrCreateTopic } from "./topic-manager.js";
 import { getVerbosity } from "./prefs.js";
+import { escapeHtml } from "../../utils/html.js";
 
 export interface TelegramNotifier {
   send(message: string): Promise<number>;
@@ -14,9 +15,27 @@ export interface TelegramNotifier {
   notifyStageCompleted(stage: StageId): Promise<void>;
   notifyStageFailed(stage: StageId, error: string): Promise<void>;
   notifyStageSkipped(stage: StageId): Promise<void>;
+  /** Update detail text shown under the current stage in the progress message */
+  updateDetail(detail: string): Promise<void>;
+  notifyRollback(
+    ticketKey: string,
+    opts: { trigger: "deploy" | "test"; success: boolean; error?: string },
+  ): Promise<void>;
 }
 
 type StageStatus = "pending" | "running" | "done" | "skipped" | "failed";
+
+const STAGE_NAME: Record<StageId, string> = {
+  fetch: "Fetch Ticket",
+  analyze: "Analyze",
+  clarify: "Clarify",
+  code: "Code",
+  git: "Git / PR",
+  review: "Review",
+  deploy: "Deploy",
+  test: "Test",
+  notify: "Notify",
+};
 
 const STAGE_IDS: StageId[] = [
   "fetch",
@@ -64,6 +83,25 @@ export function createTelegramNotifier(
     STAGE_IDS.map((id) => [id, "pending" as StageStatus]),
   );
   let progressMsgId: number | undefined;
+  let currentDetail: string | undefined;
+  let stageStartedAt: number | undefined;
+  let heartbeatTimer: NodeJS.Timeout | undefined;
+
+  function startHeartbeat(): void {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      upsertProgress().catch(() => undefined);
+    }, 30_000);
+    // Never keep the process alive just to refresh a progress message
+    heartbeatTimer.unref();
+  }
+
+  function stopHeartbeat(): void {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
+  }
 
   // Lazy topic resolution — try forum topic, fall back to configured topicId
   let _topicResolved = false;
@@ -97,9 +135,20 @@ export function createTelegramNotifier(
     }).join(" ");
 
     const current = STAGE_IDS.find((id) => stageStatus[id] === "running");
-    const statusLine = current
-      ? `\nStage: <b>${current}</b> — in progress…`
-      : "";
+
+    let statusLine = "";
+    if (current) {
+      const name = STAGE_NAME[current];
+      let elapsed = "";
+      if (stageStartedAt) {
+        const secs = Math.floor((Date.now() - stageStartedAt) / 1000);
+        const m = Math.floor(secs / 60);
+        const s = secs % 60;
+        elapsed = m > 0 ? ` (${m}m${s}s)` : ` (${s}s)`;
+      }
+      statusLine = `\n⏳ <b>${name}</b>${elapsed}`;
+      if (currentDetail) statusLine += `\n💬 ${currentDetail}`;
+    }
 
     return `🔄 <b>${ticketKey}</b>\n${pills}${statusLine}`;
   }
@@ -140,7 +189,8 @@ export function createTelegramNotifier(
     },
 
     async sendError(tk, err) {
-      const text = err instanceof Error ? err.message : String(err);
+      stopHeartbeat();
+      const text = escapeHtml(err instanceof Error ? err.message : String(err));
       const threadOpts = await makeThreadOpts();
       await bot.api.sendMessage(
         chatId,
@@ -150,9 +200,10 @@ export function createTelegramNotifier(
     },
 
     async sendDone(tk, { summary, prNumber, deployUrl }) {
-      const lines = [`✅ <b>${tk}</b> completed`, summary];
+      stopHeartbeat();
+      const lines = [`✅ <b>${tk}</b> completed`, escapeHtml(summary)];
       if (prNumber) lines.push(`PR: #${prNumber}`);
-      if (deployUrl) lines.push(`Deploy: ${deployUrl}`);
+      if (deployUrl) lines.push(`Deploy: ${escapeHtml(deployUrl)}`);
       const threadOpts = await makeThreadOpts();
       await bot.api.sendMessage(chatId, lines.join("\n"), {
         parse_mode: "HTML",
@@ -162,15 +213,21 @@ export function createTelegramNotifier(
 
     async notifyStageStarted(stage) {
       stageStatus[stage] = "running";
+      stageStartedAt = Date.now();
+      currentDetail = undefined;
       await upsertProgress();
+      startHeartbeat();
     },
 
     async notifyStageCompleted(stage) {
+      stopHeartbeat();
       stageStatus[stage] = "done";
+      currentDetail = undefined;
       await upsertProgress();
     },
 
     async notifyStageFailed(stage, error) {
+      stopHeartbeat();
       stageStatus[stage] = "failed";
       await upsertProgress().catch(() => undefined);
 
@@ -179,15 +236,32 @@ export function createTelegramNotifier(
         const threadOpts = await makeThreadOpts();
         await bot.api.sendMessage(
           chatId,
-          `❌ Stage <b>${stage}</b> failed:\n<code>${error.slice(0, 300)}</code>`,
+          `❌ Stage <b>${stage}</b> failed:\n<code>${escapeHtml(error.slice(0, 300))}</code>`,
           { parse_mode: "HTML", ...threadOpts },
         );
       }
     },
 
     async notifyStageSkipped(stage) {
+      stopHeartbeat();
       stageStatus[stage] = "skipped";
       await upsertProgress();
+    },
+
+    async updateDetail(detail) {
+      currentDetail = detail;
+      await upsertProgress();
+    },
+
+    async notifyRollback(tk, { trigger, success, error }) {
+      const threadOpts = await makeThreadOpts();
+      const message = success
+        ? `⚠️ <b>${tk}</b> — Deploy failed (${trigger}), rolled back ✓`
+        : `🚨 <b>${tk}</b> — Deploy failed (${trigger}), rollback ALSO failed ⚠️${error ? `\n<code>${escapeHtml(error.slice(0, 300))}</code>` : ""}`;
+      await bot.api.sendMessage(chatId, message, {
+        parse_mode: "HTML",
+        ...threadOpts,
+      });
     },
   };
 }

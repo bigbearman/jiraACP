@@ -11,6 +11,7 @@ export interface SpawnOptions {
   env?: Record<string, string>;
   timeoutMs?: number;
   stallTimeoutMs?: number;
+  onStdout?: (chunk: string) => void;
 }
 
 /** Spawn a process safely — args as array, never shell string (no injection risk) */
@@ -23,7 +24,7 @@ export async function spawnSafe(
     const proc = spawn(bin, args, {
       cwd: opts.cwd,
       env: opts.env ?? buildMinimalEnv(),
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
 
     let stdout = "";
@@ -55,7 +56,9 @@ export async function spawnSafe(
     resetStall();
 
     proc.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
+      const text = chunk.toString();
+      stdout += text;
+      opts.onStdout?.(text);
       resetStall();
     });
 
@@ -77,14 +80,38 @@ export async function spawnSafe(
   });
 }
 
-/** Only forward what agents need — never spread full process.env */
+const ENV_WHITELIST = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "TMPDIR",
+  "LC_*",
+  "XDG_*",
+  "GIT_*",
+  "SSH_AUTH_SOCK",
+  "SSH_AGENT_PID",
+  "ANTHROPIC_API_KEY",
+];
+
+function matchesPattern(key: string, pattern: string): boolean {
+  return pattern.endsWith("*")
+    ? key.startsWith(pattern.slice(0, -1))
+    : key === pattern;
+}
+
+/** Forward a safe subset of env vars — never spread full process.env */
 export function buildMinimalEnv(
   extra: Record<string, string> = {},
 ): Record<string, string> {
-  return {
-    PATH: process.env["PATH"] ?? "",
-    HOME: process.env["HOME"] ?? "",
-    ANTHROPIC_API_KEY: process.env["ANTHROPIC_API_KEY"] ?? "",
-    ...extra,
-  };
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (ENV_WHITELIST.some((p) => matchesPattern(key, p))) {
+      result[key] = value;
+    }
+  }
+  return { ...result, ...extra };
 }

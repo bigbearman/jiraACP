@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getBot } from "./bot.js";
+import { escapeHtml } from "../../utils/html.js";
 
 export type TimeoutAction = "skip" | "abort" | "proceed-with-warning";
 
@@ -64,7 +65,7 @@ export async function requestClarification(
   const formatted = [
     `⚠️ <b>${ticketKey}</b> — Cần clarify trước khi code`,
     "",
-    ...questions.map((q, i) => `${i + 1}. ${q}`),
+    ...questions.map((q, i) => `${i + 1}. ${escapeHtml(q)}`),
     "",
     "Reply với:",
     `<code>/answer ${ticketKey}</code>`,
@@ -162,6 +163,13 @@ interface PendingApprovalEntry extends PendingApproval {
 
 const pendingApprovals = new Map<string, PendingApprovalEntry>();
 
+function formatDuration(ms: number): string {
+  const mins = Math.floor(ms / 60_000);
+  const hours = Math.floor(mins / 60);
+  const remainMins = mins % 60;
+  return hours > 0 ? `${hours}h ${remainMins}m` : `${mins}m`;
+}
+
 export async function requestApproval(
   token: string,
   chatId: number | string,
@@ -171,6 +179,9 @@ export async function requestApproval(
     timeoutMs: number;
     onTimeout: ApprovalTimeoutAction;
     topicId?: number;
+    reminderIntervalMs?: number;
+    maxReminders?: number;
+    onReminder?: (count: number) => void;
   },
 ): Promise<boolean> {
   const bot = getBot(token);
@@ -178,7 +189,7 @@ export async function requestApproval(
 
   const issueLines = issues
     .filter((i) => i.severity === "major")
-    .map((i) => `• ${i.message}`)
+    .map((i) => `• ${escapeHtml(i.message)}`)
     .join("\n");
 
   const text = [
@@ -204,19 +215,86 @@ export async function requestApproval(
   });
 
   const expiresAt = new Date(Date.now() + opts.timeoutMs).toISOString();
+  const startedAt = Date.now();
+  const reminderInterval = opts.reminderIntervalMs ?? 1_800_000;
+  const maxReminders = opts.maxReminders ?? 3;
 
   return new Promise((resolve, reject) => {
+    let reminderCount = 0;
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+
+    const cleanup = (): void => {
+      if (intervalId !== undefined) {
+        clearInterval(intervalId);
+        intervalId = undefined;
+      }
+    };
+
     pendingApprovals.set(ticketKey, {
       ticketKey,
       messageId: msg.message_id,
       createdAt: new Date().toISOString(),
       expiresAt,
-      resolve,
-      reject,
+      resolve: (approved: boolean) => {
+        cleanup();
+        resolve(approved);
+      },
+      reject: (reason: Error) => {
+        cleanup();
+        reject(reason);
+      },
     });
+
+    // Set up reminder interval (skip if maxReminders is 0)
+    if (maxReminders > 0) {
+      intervalId = setInterval(() => {
+        reminderCount++;
+
+        if (reminderCount > maxReminders || !pendingApprovals.has(ticketKey)) {
+          cleanup();
+          return;
+        }
+
+        const elapsed = Date.now() - startedAt;
+        const remaining = opts.timeoutMs - elapsed;
+
+        const reminderText = [
+          `🔔 Reminder (${reminderCount}/${maxReminders}): <b>${ticketKey}</b> review approval pending`,
+          "",
+          `⏱ Elapsed: ${formatDuration(elapsed)} | Remaining: ${formatDuration(Math.max(0, remaining))}`,
+          "",
+          "Approve to merge or reject to abort pipeline.",
+          `Use /approve ${ticketKey} or /reject ${ticketKey}`,
+        ].join("\n");
+
+        bot.api
+          .sendMessage(chatId, reminderText, {
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: "✅ Approve & Merge",
+                    callback_data: `approve:${ticketKey}`,
+                  },
+                  {
+                    text: "❌ Reject",
+                    callback_data: `reject:${ticketKey}`,
+                  },
+                ],
+              ],
+            },
+            ...threadOpts,
+          })
+          .catch(() => undefined);
+
+        opts.onReminder?.(reminderCount);
+      }, reminderInterval);
+    }
 
     setTimeout(() => {
       if (!pendingApprovals.has(ticketKey)) return;
+      cleanup();
       pendingApprovals.delete(ticketKey);
 
       if (opts.onTimeout === "merge-anyway") {

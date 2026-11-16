@@ -2,7 +2,7 @@
 
 > AI-powered Jira pipeline CLI: Ticket → Code → GitHub → Deploy → Notify
 
-[![npm version](https://img.shields.io/npm/v/jira-acp.svg)](https://www.npmjs.com/package/jira-acp)
+[![npm version](https://img.shields.io/npm/v/jira-acp.svg)](https://www.npmjs.com/package/@jiraacp/cli)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -73,7 +73,7 @@ Stage 4 auto-upgrades to Opus for auth, payments, DB schema changes, or cross-mo
 ### Server (Daemon)
 
 ```bash
-jiraACP start [--port 3100]   # Start background server
+jiraACP start [--port 3110]   # Start background server
 jiraACP stop                   # Stop background server
 jiraACP restart                # Restart background server
 jiraACP status                 # Check if server is running
@@ -141,7 +141,7 @@ jiraACP schedule remove <id>
 ### Utilities
 
 ```bash
-jiraACP serve [--port 3100]    # Foreground webhook server (for dev/Docker)
+jiraACP serve [--port 3110]    # Foreground webhook server (for dev/Docker)
 ```
 
 ---

@@ -23,8 +23,38 @@ export type PipelineEvent =
   | { type: "HUMAN_APPROVAL_REQUESTED"; context: unknown; timestamp: string }
   | { type: "HUMAN_APPROVED"; timestamp: string }
   | { type: "HUMAN_REJECTED"; reason: string; timestamp: string }
+  | { type: "APPROVAL_REMINDER_SENT"; count: number; timestamp: string }
+  | {
+      type: "CI_POLLING_STARTED";
+      sha: string;
+      requiredChecks: string[];
+      timeoutMs: number;
+      timestamp: string;
+    }
+  | {
+      type: "CI_COMPLETED";
+      status: string;
+      passedCount: number;
+      failedCount: number;
+      durationMs: number;
+      timestamp: string;
+    }
+  | {
+      type: "CI_TIMEOUT";
+      elapsedMs: number;
+      pendingChecks: string[];
+      timestamp: string;
+    }
   | { type: "PIPELINE_COMPLETED"; timestamp: string }
-  | { type: "PIPELINE_ABORTED"; reason: string; timestamp: string };
+  | { type: "PIPELINE_ABORTED"; reason: string; timestamp: string }
+  | { type: "ANALYZE_PARSE_FALLBACK"; rawSnippet: string; timestamp: string }
+  | {
+      type: "DEPLOY_ROLLED_BACK";
+      trigger: "deploy" | "test";
+      success: boolean;
+      durationMs: number;
+      timestamp: string;
+    };
 
 // ── Derived state ─────────────────────────────────────────────────────────
 
@@ -136,6 +166,16 @@ export class StateManager {
 
   get current(): PipelineState {
     return this.events.reduce(applyEvent, { ...INITIAL_STATE });
+  }
+
+  /** Output of the most recent successful run of a stage, or undefined. */
+  lastStageOutput(stage: StageId): unknown {
+    return this.events
+      .filter(
+        (e): e is Extract<PipelineEvent, { type: "STAGE_COMPLETED" }> =>
+          e.type === "STAGE_COMPLETED" && e.stage === stage,
+      )
+      .at(-1)?.output;
   }
 
   private load(): PipelineEvent[] {
