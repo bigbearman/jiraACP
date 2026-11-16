@@ -11,6 +11,7 @@ import { createGitHubClient } from "../integrations/github/client.js";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+import { UsageRecorder } from "../pipeline/token-usage.js";
 
 export interface TriageOptions {
   projectName: string;
@@ -62,6 +63,8 @@ export async function runTriage(opts: TriageOptions): Promise<void> {
     memoryDir: tmpMemoryDir,
     dryRun: opts.dryRun ?? false,
     logger,
+    // Triage does not write run state, so its token usage is not persisted
+    usage: new UsageRecorder(),
     jira: jiraClient,
     github: createGitHubClient(
       config.github.token,
@@ -170,6 +173,8 @@ async function analyzeTicket(
     memoryDir,
     dryRun: opts.dryRun ?? false,
     logger,
+    // Triage does not write run state, so its token usage is not persisted
+    usage: new UsageRecorder(),
     jira: getJiraClient(config.jira.instance),
     github: createGitHubClient(
       config.github.token,

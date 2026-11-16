@@ -63,6 +63,7 @@ function makeCtx(
     projectDir: tmpDir,
     memoryDir: path.join(tmpDir, "memory"),
     dryRun: false,
+    usage: { record: vi.fn() },
     config: {
       name: "test",
       jira: {
