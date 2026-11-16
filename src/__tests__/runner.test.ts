@@ -15,11 +15,30 @@ vi.mock("../utils/process.js", () => ({
 
 let tmpDir: string;
 
+const cliJson = (overrides: Record<string, unknown> = {}): string =>
+  JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result: "agent output",
+    total_cost_usd: 0.002,
+    modelUsage: {
+      "claude-haiku-4-5-20251001": {
+        inputTokens: 1000,
+        outputTokens: 200,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        costUSD: 0.002,
+      },
+    },
+    ...overrides,
+  });
+
 beforeEach(() => {
   mockSpawnSafe.mockClear();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "runner-test-"));
   mockSpawnSafe.mockResolvedValue({
-    stdout: "agent output",
+    stdout: cliJson(),
     stderr: "",
     exitCode: 0,
   });
@@ -134,14 +153,25 @@ describe("buildClaudeArgs — model and base flags", () => {
     expect(args[args.indexOf("--model") + 1]).toBe("claude-haiku-4-5-20251001");
   });
 
-  it("passes --print and --output-format text", async () => {
+  it("passes --print and --output-format json", async () => {
     const { runAgent } = await import("../pipeline/runner.js");
     await runAgent({ prompt: "hello", workdir: tmpDir, model: "sonnet" });
 
     const [, args] = mockSpawnSafe.mock.calls[0] as [string, string[]];
     expect(args).toContain("--print");
     expect(args).toContain("--output-format");
-    expect(args[args.indexOf("--output-format") + 1]).toBe("text");
+    expect(args[args.indexOf("--output-format") + 1]).toBe("json");
+  });
+
+  it.each([
+    ["sonnet", "claude-sonnet-4-6"],
+    ["opus", "claude-opus-4-6"],
+  ] as const)("passes the model ID for %s", async (model, id) => {
+    const { runAgent } = await import("../pipeline/runner.js");
+    await runAgent({ prompt: "hello", workdir: tmpDir, model });
+
+    const [, args] = mockSpawnSafe.mock.calls[0] as [string, string[]];
+    expect(args[args.indexOf("--model") + 1]).toBe(id);
   });
 });
 
@@ -158,9 +188,9 @@ describe("runAgent — error handling", () => {
     ).rejects.toThrow(/Agent exited with code 1/);
   });
 
-  it("returns trimmed stdout on success", async () => {
+  it("returns the trimmed result field on success", async () => {
     mockSpawnSafe.mockResolvedValueOnce({
-      stdout: "  result  \n",
+      stdout: cliJson({ result: "  result  \n" }),
       stderr: "",
       exitCode: 0,
     });
@@ -171,6 +201,82 @@ describe("runAgent — error handling", () => {
       model: "haiku",
     });
     expect(out).toBe("result");
+  });
+
+  it("returns trimmed stdout when the CLI output is not JSON", async () => {
+    mockSpawnSafe.mockResolvedValueOnce({
+      stdout: "  plain text  \n",
+      stderr: "",
+      exitCode: 0,
+    });
+    const record = vi.fn();
+    const { runAgent } = await import("../pipeline/runner.js");
+    const out = await runAgent({
+      prompt: "hello",
+      workdir: tmpDir,
+      model: "haiku",
+      usage: { record },
+    });
+    expect(out).toBe("plain text");
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it("throws when the CLI reports is_error", async () => {
+    mockSpawnSafe.mockResolvedValueOnce({
+      stdout: cliJson({ is_error: true, subtype: "error_max_turns" }),
+      stderr: "",
+      exitCode: 0,
+    });
+    const { runAgent } = await import("../pipeline/runner.js");
+    await expect(
+      runAgent({ prompt: "hello", workdir: tmpDir, model: "haiku" }),
+    ).rejects.toThrow(/error_max_turns/);
+  });
+});
+
+describe("runAgent — token usage", () => {
+  it("records the CLI's per-model usage", async () => {
+    const record = vi.fn();
+    const { runAgent } = await import("../pipeline/runner.js");
+    await runAgent({
+      prompt: "hello",
+      workdir: tmpDir,
+      model: "haiku",
+      usage: { record },
+    });
+
+    expect(record).toHaveBeenCalledOnce();
+    expect(record.mock.calls[0][0]).toEqual({
+      cliReportedCostUsd: 0.002,
+      byModel: {
+        "claude-haiku-4-5-20251001": {
+          inputTokens: 1000,
+          outputTokens: 200,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+          cliCostUsd: 0.002,
+        },
+      },
+    });
+  });
+
+  it("records usage even when the CLI exits non-zero", async () => {
+    mockSpawnSafe.mockResolvedValueOnce({
+      stdout: cliJson({ is_error: true, result: "auth failed" }),
+      stderr: "",
+      exitCode: 1,
+    });
+    const record = vi.fn();
+    const { runAgent } = await import("../pipeline/runner.js");
+    await expect(
+      runAgent({
+        prompt: "hello",
+        workdir: tmpDir,
+        model: "haiku",
+        usage: { record },
+      }),
+    ).rejects.toThrow(/auth failed/);
+    expect(record).toHaveBeenCalledOnce();
   });
 });
 
@@ -183,5 +289,10 @@ describe("detectComplexity", () => {
   it("returns sonnet when fewer than 2 keywords match", async () => {
     const { detectComplexity } = await import("../pipeline/runner.js");
     expect(detectComplexity("add a button to the UI")).toBe("sonnet");
+  });
+
+  it("keeps the given base model when the task is simple", async () => {
+    const { detectComplexity } = await import("../pipeline/runner.js");
+    expect(detectComplexity("add a button", "haiku")).toBe("haiku");
   });
 });
