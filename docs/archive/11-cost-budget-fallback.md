@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: not planned.** Not implemented. The current direction is to record token usage and stop a run at its cost limit, not to fall back to a cheaper model.
+
 # Feature 11 — Cost Budget Tier with Model Fallback
 
 > Priority: Tier 3 (strategic) · Size: S · Sprint 7

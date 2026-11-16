@@ -1,5 +1,7 @@
 # jiraACP — Product Specification
 
+> **Historical planning document.** This spec was written before the product direction was set and describes a wider scope (auto-merge, deploy by default, Slack, plugins, a web dashboard) than the project now pursues. The current source of truth is [docs/PRODUCT.md](https://github.com/bigbearman/jiraACP/blob/main/docs/PRODUCT.md). The feature specs it links to are in `docs/archive/`.
+
 > AI-powered project pipeline CLI: Jira → Code → GitHub → Deploy → Notify
 
 ## 1. Overview
@@ -412,7 +414,7 @@ Wire existing `rollbackCommand` config into failure paths of stage 7 (Deploy) an
 - [ ] Rollback timeout kills process after `rollbackTimeout` ms
 
 **Files:** `src/pipeline/rollback.ts` (new), `7-deploy.ts`, `8-test.ts`, `state.ts`, `schema.ts`, `notifier.ts`
-**Spec:** `docs/specs/01-auto-rollback.md`
+**Spec:** `docs/archive/01-auto-rollback.md`
 
 ### 12.2 CI Status Polling with Exponential Backoff (Sprint 4, Size S)
 
@@ -428,7 +430,7 @@ After PR creation in stage 5, poll GitHub CI status with exponential backoff (5s
 - [ ] Configurable `ciTimeout` (default 30min)
 
 **Files:** `src/pipeline/ci-poller.ts` (new), `5-git.ts`, `github/client.ts`, `schema.ts`, `state.ts`
-**Spec:** `docs/specs/02-ci-polling-backoff.md`
+**Spec:** `docs/archive/02-ci-polling-backoff.md`
 
 ### 12.3 Memory File Mutex for Concurrent Agents (Sprint 4, Size XS)
 
@@ -442,7 +444,7 @@ Fix race condition in stage 6 (Review) where 2 parallel agents write to same con
 - [ ] No behavior change for non-parallel stages
 
 **Files:** `src/utils/lock.ts`, `src/memory/context-builder.ts`, `6-review.ts`
-**Spec:** `docs/specs/03-memory-file-mutex.md`
+**Spec:** `docs/archive/03-memory-file-mutex.md`
 
 ### 12.4 Analyze Stage Fallback Strategy (Sprint 4, Size XS)
 
@@ -457,7 +459,7 @@ When stage 2 (Analyze) agent returns unparseable JSON, retry once with explicit 
 - [ ] Telegram warning sent on fallback
 
 **Files:** `2-analyze.ts`, `state.ts`, `schema.ts`, `notifier.ts`
-**Spec:** `docs/specs/04-analyze-fallback.md`
+**Spec:** `docs/archive/04-analyze-fallback.md`
 
 ### 12.5 Review Approval Reminder (Sprint 4, Size XS)
 
@@ -473,7 +475,7 @@ Periodic Telegram reminder pings while awaiting review approval. First reminder 
 - [ ] `maxReminders: 0` disables reminders
 
 **Files:** `6-review.ts`, `telegram/human-loop.ts`, `schema.ts`, `state.ts`
-**Spec:** `docs/specs/05-review-approval-reminder.md`
+**Spec:** `docs/archive/05-review-approval-reminder.md`
 
 ### 12.6 Multi-Ticket Dependency DAG (Sprint 5, Size M)
 
@@ -490,7 +492,7 @@ Build dependency DAG from Jira issue links for `sprint --respect-deps`. Topologi
 - [ ] New MCP tool: `jira_get_dependencies`
 
 **Files:** `src/pipeline/dag.ts` (new), `src/commands/deps.ts` (new), `sprint.ts`, `jira/client.ts`, `jira/tools.ts`, `cli.ts`, `state.ts`
-**Spec:** `docs/specs/06-ticket-dependency-dag.md`
+**Spec:** `docs/archive/06-ticket-dependency-dag.md`
 
 ### 12.7 Learning Loop: Auto-Retry with Feedback (Sprint 5, Size M)
 
@@ -508,7 +510,7 @@ When review rejects or tests fail, auto-feed failure context back to stage 4 (Co
 - [ ] Force-push to same branch, update PR description on retry
 
 **Files:** `src/pipeline/retry.ts` (new), `orchestrator.ts`, `4-code.ts`, `6-review.ts`, `context-builder.ts`, `state.ts`, `notifier.ts`
-**Spec:** `docs/specs/07-learning-loop.md`
+**Spec:** `docs/archive/07-learning-loop.md`
 
 ### 12.8 Slack Adapter (Sprint 6, Size M)
 
@@ -526,7 +528,7 @@ Extract `NotificationAdapter` interface from Telegram, implement `SlackAdapter` 
 - [ ] `init` wizard supports Slack option
 
 **Files:** `src/integrations/notifications/adapter.ts` (new), `src/integrations/slack/` (new dir), refactor `telegram/notifier.ts`, `telegram/human-loop.ts`, stages 3/6/9, `schema.ts`, `init.ts`
-**Spec:** `docs/specs/08-slack-adapter.md`
+**Spec:** `docs/archive/08-slack-adapter.md`
 
 ### 12.9 Jira Webhook Auto-Trigger (Sprint 6, Size M)
 
@@ -545,7 +547,7 @@ Implement webhook processing in `serve` command. Jira POST → filter by status 
 - [ ] Proper HTTP status codes: 400, 401, 404, 429, 503
 
 **Files:** `src/webhook/` (new dir: handler.ts, validator.ts, rate-limiter.ts), `src/commands/webhook.ts` (new), `serve.ts`, `jira/client.ts`, `cli.ts`, `schema.ts`
-**Spec:** `docs/specs/09-webhook-ingest.md`
+**Spec:** `docs/archive/09-webhook-ingest.md`
 
 ### 12.10 Web Dashboard (Sprint 6, Size M-L)
 
@@ -562,7 +564,7 @@ Read-only web dashboard served from existing HTTP server (port 3110). Server-ren
 - [ ] `dashboard.enabled: false` disables dashboard routes
 
 **Files:** `src/dashboard/` (new dir: router.ts, views/, api.ts, sse.ts, styles.ts, data.ts), `serve.ts`, `schema.ts`
-**Spec:** `docs/specs/10-web-dashboard.md`
+**Spec:** `docs/archive/10-web-dashboard.md`
 
 ### 12.11 Cost Budget Tier with Model Fallback (Sprint 7, Size S)
 
@@ -579,7 +581,7 @@ Replace hard abort at `maxCostUsdPerRun` with tiered response: warn at 70%, down
 - [ ] Telegram receives warn + downgrade messages
 
 **Files:** `cost-guard.ts`, `orchestrator.ts`, `notifier.ts`, `state.ts`, `schema.ts`
-**Spec:** `docs/specs/11-cost-budget-fallback.md`
+**Spec:** `docs/archive/11-cost-budget-fallback.md`
 
 ### 12.12 Plugin System (Sprint 7+, Size L)
 
@@ -598,4 +600,4 @@ TypeScript plugin system (inspired by OpenACP): npm packages with standard entry
 - [ ] Plugin scaffold template via `plugin create`
 
 **Files:** `src/plugin/` (new dir: loader.ts, context.ts, registry.ts, lifecycle.ts, storage.ts, template/), `src/commands/plugin.ts` (new), `cli.ts`, `orchestrator.ts`, `serve.ts`, `schema.ts`
-**Spec:** `docs/specs/12-plugin-system.md`
+**Spec:** `docs/archive/12-plugin-system.md`

@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: out of scope.** Not implemented; only the shell-script hooks in `src/pipeline/hooks.ts` exist.
+
 # Feature 12 — Plugin System
 
 > Priority: Tier 3 (strategic) · Size: L · Sprint 7+

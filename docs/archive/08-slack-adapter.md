@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: out of scope.** Not implemented; Telegram is the only chat channel.
+
 # Feature 08 — Slack Adapter
 
 > Priority: Tier 2 (expansion) · Size: M · Sprint 6

@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: implemented** in stage 6 and `src/integrations/telegram/human-loop.ts` (`APPROVAL_REMINDER_SENT` events).
+
 # Feature 05 — Review Approval Reminder
 
 > Priority: Tier 1 (gap fill) · Size: XS · Sprint 4

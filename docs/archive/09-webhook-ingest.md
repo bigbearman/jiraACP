@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: not planned.** `jiraACP serve` has a basic `POST /webhook/jira` endpoint; the rest of this spec is not implemented.
+
 # Feature 09 — Jira Webhook Auto-Trigger
 
 > Priority: Tier 2 (automation) · Size: M · Sprint 6

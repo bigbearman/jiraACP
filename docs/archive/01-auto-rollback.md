@@ -1,3 +1,5 @@
+> **Archived idea, not a roadmap.** The current direction is in [docs/PRODUCT.md](../PRODUCT.md). **Status: implemented** in `src/pipeline/rollback.ts`, called from the deploy and test stages.
+
 # Feature 01 — Auto-Rollback on Deploy/Test Failure
 
 > Priority: Tier 1 (gap fill) · Size: S · Sprint 4
