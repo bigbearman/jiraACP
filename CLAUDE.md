@@ -36,18 +36,18 @@ CLI (commander.js)
 
 When starting a new session, ALWAYS do this first:
 
-1. Check if `PIPELINE_STATE.md` exists
+1. Check if `docs/dev-process/PIPELINE_STATE.md` exists
    - **No** → pipeline has not started. Say: "Pipeline not started. Run: `@orchestrator start`"
    - **Yes** → read it, report current phase and next action in one sentence
 
-2. Never assume pipeline state from memory — always read `PIPELINE_STATE.md` fresh
+2. Never assume pipeline state from memory — always read `docs/dev-process/PIPELINE_STATE.md` fresh
 
 ## Commands
 
 ```
 @orchestrator start          # new project — runs all 4 phases automatically
 @orchestrator resume         # continue after session interruption
-@orchestrator spec-updated   # SPEC.md changed — stop, diff, inject new tasks
+@orchestrator spec-updated   # docs/dev-process/SPEC.md changed — stop, diff, inject new tasks
 ```
 
 ## Agent roster
@@ -56,7 +56,7 @@ When starting a new session, ALWAYS do this first:
 |---------|------|
 | `@orchestrator` | Coordinates the full pipeline |
 | `@task-planner` | Generate or add tasks |
-| `@architect` | Scaffold modules, write ARCH_REPORT.md |
+| `@architect` | Scaffold modules, write docs/dev-process/ARCH_REPORT.md |
 | `@developer` | Implement a specific task |
 | `@tester` | Validate a completed task |
 | `@debugger` | Diagnose a failed task |
@@ -65,5 +65,5 @@ When starting a new session, ALWAYS do this first:
 
 - Never mark a task done without `npm run build` passing clean
 - Never modify files outside the scope of the current task
-- `PIPELINE_STATE.md` is the single source of truth — always read before acting
+- `docs/dev-process/PIPELINE_STATE.md` is the single source of truth — always read before acting
 - When in doubt: stop and write a `## Blocker` note, do not guess
