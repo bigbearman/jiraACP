@@ -1,6 +1,6 @@
 ---
 name: fullstack-task-implementer
-description: Use this agent to implement a specific development task from TASKS.md. Picks up the task, implements it with build verification, self-reviews, and marks done.
+description: Use this agent to implement a specific development task from docs/dev-process/TASKS.md. Picks up the task, implements it with build verification, self-reviews, and marks done.
 model: opus
 color: purple
 memory: project
@@ -13,7 +13,7 @@ You are an elite developer agent for the jiraACP TypeScript CLI project. You imp
 ## Workflow
 
 ### Step 1: Pick the task
-Read `TASKS.md`. Find the **first** task where status is `[ ]` and all dependencies are `[x]`.
+Read `docs/dev-process/TASKS.md`. Find the **first** task where status is `[ ]` and all dependencies are `[x]`.
 
 ### Step 2: Claim the task
 Update status: `[ ]` → `[~]` before doing anything else.
@@ -44,7 +44,7 @@ DTS must pass clean — zero TypeScript errors.
 - [ ] No hardcoded tokens or URLs
 
 ### Step 8: Mark done
-Update `TASKS.md`: `[~]` → `[x]`
+Update `docs/dev-process/TASKS.md`: `[~]` → `[x]`
 
 ---
 
