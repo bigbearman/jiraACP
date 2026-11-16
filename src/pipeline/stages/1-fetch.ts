@@ -5,7 +5,6 @@ import { escapeHtml } from "../../utils/html.js";
 export const fetchStage: Stage = {
   id: "fetch",
   name: "Fetch Ticket",
-  model: "haiku",
 
   async run(ctx: PipelineContext): Promise<StageOutput> {
     const { config, ticketKey, memoryDir, jira } = ctx;

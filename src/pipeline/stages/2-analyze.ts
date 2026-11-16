@@ -1,5 +1,5 @@
 import type { Stage, PipelineContext, StageOutput } from "./types.js";
-import { runAgent } from "../runner.js";
+import { runAgent, type AgentModel } from "../runner.js";
 import { readTicketContext } from "../../memory/context-builder.js";
 
 interface ClarityResult {
@@ -64,10 +64,13 @@ function tryExtractScore(raw: string): number | null {
   return score;
 }
 
+// Clarity scoring is a short classification task
+const MODEL: AgentModel = "haiku";
+
 export const analyzeStage: Stage = {
   id: "analyze",
   name: "Analyze Clarity",
-  model: "sonnet",
+  model: MODEL,
 
   async run(ctx: PipelineContext): Promise<StageOutput> {
     const { config, memoryDir, ticketKey } = ctx;
@@ -92,7 +95,8 @@ export const analyzeStage: Stage = {
     );
     const agentOpts = {
       workdir: config.workspace.rootDir,
-      model: "haiku" as const,
+      model: MODEL,
+      usage: ctx.usage,
       timeoutMs: attemptTimeoutMs,
       stallTimeoutMs: Math.min(30_000, attemptTimeoutMs),
     };

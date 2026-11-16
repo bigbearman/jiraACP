@@ -54,6 +54,7 @@ function makeCtx(overrides: Partial<PipelineContext> = {}): PipelineContext {
     projectDir: tmpDir,
     memoryDir,
     dryRun: false,
+    usage: { record: vi.fn() },
     config: {
       name: "test",
       jira: {
@@ -1117,6 +1118,90 @@ describe("notifyStage ?? fallbacks", () => {
     expect(jiraPost).toHaveBeenCalledWith(
       "/issue/HI-200/transitions",
       expect.any(Object),
+    );
+  });
+});
+
+// ── Declared model matches the model each stage calls ────────────────────────
+
+describe("stage model declarations", () => {
+  it("only stages that call an LLM declare a model", async () => {
+    const stages = await Promise.all([
+      import("../pipeline/stages/1-fetch.js").then((m) => m.fetchStage),
+      import("../pipeline/stages/3-clarify.js").then((m) => m.clarifyStage),
+      import("../pipeline/stages/5-git.js").then((m) => m.gitStage),
+      import("../pipeline/stages/7-deploy.js").then((m) => m.deployStage),
+      import("../pipeline/stages/9-notify.js").then((m) => m.notifyStage),
+    ]);
+    for (const stage of stages) {
+      expect(stage.model, stage.id).toBeUndefined();
+    }
+  });
+
+  it("analyze calls the model it declares and reports usage", async () => {
+    const { runAgent } = await import("../pipeline/runner.js");
+    (runAgent as ReturnType<typeof vi.fn>).mockResolvedValue(
+      '{"score":0.9,"missing":[],"questions":[]}',
+    );
+    const { analyzeStage } = await import("../pipeline/stages/2-analyze.js");
+    const ctx = makeCtx();
+    writeTicketCtx(ctx.memoryDir);
+
+    await analyzeStage.run(ctx);
+    expect(analyzeStage.model).toBe("haiku");
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ model: analyzeStage.model, usage: ctx.usage }),
+    );
+  });
+
+  it("code starts from its declared model and reports usage", async () => {
+    const { runAgent, detectComplexity } =
+      await import("../pipeline/runner.js");
+    (runAgent as ReturnType<typeof vi.fn>).mockResolvedValueOnce("done");
+    const { codeStage } = await import("../pipeline/stages/4-code.js");
+    const ctx = makeCtx();
+    writeTicketCtx(ctx.memoryDir);
+
+    await codeStage.run(ctx);
+    expect(detectComplexity).toHaveBeenCalledWith(
+      expect.any(String),
+      codeStage.model,
+    );
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ usage: ctx.usage }),
+    );
+  });
+
+  it("review agents call the model the stage declares", async () => {
+    const { runAgentsParallel } = await import("../pipeline/runner.js");
+    const { reviewStage } = await import("../pipeline/stages/6-review.js");
+    const ctx = makeCtx();
+    ctx.state.current.prNumber = 10;
+    fs.mkdirSync(ctx.memoryDir, { recursive: true });
+
+    await reviewStage.run(ctx);
+    const [a, b] = (runAgentsParallel as ReturnType<typeof vi.fn>).mock
+      .calls[0] as [{ model: string; usage: unknown }, { model: string }];
+    expect(a.model).toBe(reviewStage.model);
+    expect(b.model).toBe(reviewStage.model);
+    expect(a.usage).toBe(ctx.usage);
+  });
+
+  it("test calls the model the stage declares", async () => {
+    const { runAgent } = await import("../pipeline/runner.js");
+    (runAgent as ReturnType<typeof vi.fn>).mockResolvedValue(
+      '{"passed":true,"summary":"ok","failures":[]}',
+    );
+    const { testStage } = await import("../pipeline/stages/8-test.js");
+    const ctx = makeCtx();
+    ctx.config.test.enabled = true;
+    (ctx.config.test as Record<string, unknown>).baseUrl =
+      "http://localhost:3000";
+    ctx.config.test.waitBeforeTestMs = 0;
+
+    await testStage.run(ctx);
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ model: testStage.model, usage: ctx.usage }),
     );
   });
 });

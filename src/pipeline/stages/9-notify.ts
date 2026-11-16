@@ -3,7 +3,6 @@ import type { Stage, PipelineContext, StageOutput } from "./types.js";
 export const notifyStage: Stage = {
   id: "notify",
   name: "Notify",
-  model: "haiku",
 
   async run(ctx: PipelineContext): Promise<StageOutput> {
     const { config, ticketKey, state, jira } = ctx;

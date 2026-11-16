@@ -1,5 +1,5 @@
 import type { Stage, PipelineContext, StageOutput } from "./types.js";
-import { runAgentsParallel } from "../runner.js";
+import { runAgentsParallel, type AgentModel } from "../runner.js";
 import {
   getContextFilesForStage,
   writeReviewFeedback,
@@ -7,10 +7,12 @@ import {
 } from "../../memory/context-builder.js";
 import { requestApproval } from "../../integrations/telegram/human-loop.js";
 
+const MODEL: AgentModel = "sonnet";
+
 export const reviewStage: Stage = {
   id: "review",
   name: "Review",
-  model: "sonnet",
+  model: MODEL,
 
   async run(ctx: PipelineContext): Promise<StageOutput> {
     const { config, ticketKey, state, memoryDir, projectDir } = ctx;
@@ -38,11 +40,12 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
 
     const agentOpts = {
       workdir: config.workspace.rootDir,
-      model: "sonnet" as const,
+      model: MODEL,
       contextFiles,
       timeoutMs: (config.pipeline?.stageTimeouts?.review ?? 600_000) / 2,
       stallTimeoutMs: 120_000,
       logger: ctx.logger,
+      usage: ctx.usage,
     };
 
     const [logicRaw, qualityRaw] = ctx.dryRun

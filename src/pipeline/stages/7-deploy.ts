@@ -6,7 +6,6 @@ import { escapeHtml } from "../../utils/html.js";
 export const deployStage: Stage = {
   id: "deploy",
   name: "Deploy",
-  model: "haiku",
 
   async shouldSkip(ctx: PipelineContext): Promise<boolean> {
     return !ctx.config.deploy?.enabled;
