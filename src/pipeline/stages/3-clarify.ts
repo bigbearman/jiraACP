@@ -26,7 +26,6 @@ function readAnalyzeOutput(ctx: PipelineContext): {
 export const clarifyStage: Stage = {
   id: "clarify",
   name: "Clarify",
-  model: "haiku",
 
   async shouldSkip(ctx: PipelineContext): Promise<boolean> {
     if (!ctx.state.current.completedStages.includes("analyze")) return true;

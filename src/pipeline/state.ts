@@ -16,7 +16,14 @@ export type PipelineEvent =
       output: unknown;
       timestamp: string;
     }
-  | { type: "STAGE_FAILED"; stage: StageId; error: string; timestamp: string }
+  | {
+      type: "STAGE_FAILED";
+      stage: StageId;
+      error: string;
+      /** Tokens the stage spent before failing; same shape as output.tokenUsage */
+      tokenUsage?: unknown;
+      timestamp: string;
+    }
   | { type: "STAGE_SKIPPED"; stage: StageId; reason: string; timestamp: string }
   | { type: "CLARIFICATION_REQUESTED"; questions: string[]; timestamp: string }
   | { type: "CLARIFICATION_RECEIVED"; answers: string; timestamp: string }

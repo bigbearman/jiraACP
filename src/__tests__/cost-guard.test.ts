@@ -29,7 +29,8 @@ function makeTelegram(): TelegramNotifier {
 
 function writeStateEvents(runDir: string, events: unknown[]): void {
   fs.mkdirSync(runDir, { recursive: true });
-  const lines = events.map((e) => JSON.stringify(e)).join("\n");
+  const started = { type: "STARTED", ticketKey: "HI-1" };
+  const lines = [started, ...events].map((e) => JSON.stringify(e)).join("\n");
   fs.writeFileSync(path.join(runDir, "state.json"), lines);
 }
 
@@ -75,7 +76,7 @@ describe("checkCostLimit", () => {
     const tg = makeTelegram();
     // 1M input + 1M output tokens at sonnet pricing = $3 + $15 = $18
     writeStateEvents(tmpDir, [
-      stageCompleted(1_000_000, 1_000_000, "claude-sonnet-4"),
+      stageCompleted(1_000_000, 1_000_000, "claude-sonnet-4-6"),
     ]);
 
     const result = await checkCostLimit({
@@ -94,12 +95,9 @@ describe("checkCostLimit", () => {
 
   it("sends 80% warning but continues when cost is 80-99% of limit", async () => {
     const tg = makeTelegram();
-    // sonnet: $3/1M input, $15/1M output
-    // 500k input ($1.5) + 100k output ($1.5) = $3 total
-    // maxCostUsd = $4 → 75%... let me use exact numbers
-    // Use 267k input tokens at sonnet = $0.80, limit $1.00 → 80%
+    // 850k input at $3/1M = $2.55, limit $3.00 → 85%
     writeStateEvents(tmpDir, [
-      stageCompleted(800_000, 0, "claude-sonnet-4"), // $2.4 at $3/1M input
+      stageCompleted(850_000, 0, "claude-sonnet-4-6"),
     ]);
 
     const result = await checkCostLimit({
@@ -119,7 +117,7 @@ describe("checkCostLimit", () => {
     const tg = makeTelegram();
     writeStateEvents(tmpDir, [
       { type: "STAGE_STARTED", stage: "fetch" },
-      { type: "PIPELINE_STARTED" },
+      { type: "STAGE_SKIPPED", stage: "clarify", reason: "clear" },
     ]);
 
     const result = await checkCostLimit({
@@ -146,5 +144,53 @@ describe("checkCostLimit", () => {
       ticketKey: "HI-5",
     });
     expect(result).toBe("continue");
+  });
+
+  it("counts only the current run, not earlier runs of the ticket", async () => {
+    const tg = makeTelegram();
+    fs.writeFileSync(
+      path.join(tmpDir, "state.json"),
+      [
+        { type: "STARTED", ticketKey: "HI-6" },
+        stageCompleted(1_000_000, 1_000_000, "claude-sonnet-4-6"), // $18
+        { type: "PIPELINE_ABORTED", reason: "Cost limit exceeded" },
+        { type: "STARTED", ticketKey: "HI-6" },
+        stageCompleted(1000, 1000), // well under $1
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n"),
+    );
+
+    const result = await checkCostLimit({
+      runDir: tmpDir,
+      maxCostUsd: 1.0,
+      telegram: tg,
+      ticketKey: "HI-6",
+    });
+    expect(result).toBe("continue");
+  });
+
+  it("counts tokens spent by a failed stage", async () => {
+    const tg = makeTelegram();
+    writeStateEvents(tmpDir, [
+      {
+        type: "STAGE_FAILED",
+        stage: "code",
+        error: "boom",
+        tokenUsage: {
+          inputTokens: 1_000_000,
+          outputTokens: 0,
+          model: "claude-opus-4-6",
+        }, // $5
+      },
+    ]);
+
+    const result = await checkCostLimit({
+      runDir: tmpDir,
+      maxCostUsd: 2.0,
+      telegram: tg,
+      ticketKey: "HI-7",
+    });
+    expect(result).toBe("abort");
   });
 });

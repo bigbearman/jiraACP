@@ -1,5 +1,5 @@
 import type { Stage, PipelineContext, StageOutput } from "./types.js";
-import { runAgent } from "../runner.js";
+import { runAgent, type AgentModel } from "../runner.js";
 import { getContextFilesForStage } from "../../memory/context-builder.js";
 import { attemptRollback } from "../rollback.js";
 import { escapeHtml } from "../../utils/html.js";
@@ -7,10 +7,12 @@ import { escapeHtml } from "../../utils/html.js";
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
 
+const MODEL: AgentModel = "sonnet";
+
 export const testStage: Stage = {
   id: "test",
   name: "UI Test",
-  model: "sonnet",
+  model: MODEL,
 
   async shouldSkip(ctx: PipelineContext): Promise<boolean> {
     return !ctx.config.test?.enabled;
@@ -57,11 +59,12 @@ Report results as JSON: { "passed": boolean, "summary": "...", "failures": ["...
           : await runAgent({
               prompt,
               workdir: config.workspace.rootDir,
-              model: "sonnet",
+              model: MODEL,
               contextFiles,
               timeoutMs: testConfig.timeoutMs ?? 300_000,
               stallTimeoutMs: 60_000,
               logger: ctx.logger,
+              usage: ctx.usage,
             });
 
         const match = raw.match(/\{[\s\S]*\}/);

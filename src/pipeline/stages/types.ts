@@ -4,6 +4,8 @@ import type { JiraClient } from "../../integrations/jira/client.js";
 import type { GitHubClient } from "../../integrations/github/client.js";
 import type { TelegramNotifier } from "../../integrations/telegram/notifier.js";
 import type { Logger } from "pino";
+import type { AgentModel } from "../runner.js";
+import type { UsageSink } from "../token-usage.js";
 
 export interface PipelineContext {
   config: ProjectConfig;
@@ -16,6 +18,8 @@ export interface PipelineContext {
   logger: Logger;
   dryRun: boolean;
   memoryDir: string;
+  /** Pass to runAgent so the orchestrator can record the stage's token usage */
+  usage: UsageSink;
 }
 
 export interface StageOutput {
@@ -25,7 +29,8 @@ export interface StageOutput {
 export interface Stage {
   id: StageId;
   name: string;
-  model: "haiku" | "sonnet" | "opus";
+  /** Model the stage calls; absent when the stage makes no LLM call */
+  model?: AgentModel;
   run(ctx: PipelineContext): Promise<StageOutput>;
   shouldSkip?(ctx: PipelineContext): Promise<boolean>;
 }

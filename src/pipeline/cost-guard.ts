@@ -1,6 +1,28 @@
 import type { TelegramNotifier } from "../integrations/telegram/notifier.js";
-import { getEvents } from "./state.js";
-import { estimateCostUsd, extractTokenUsage } from "../utils/pricing.js";
+import { getEvents, type PipelineEvent } from "./state.js";
+import { extractTokenUsage } from "./token-usage.js";
+
+/**
+ * Cost of the current run: stages completed or failed since the latest
+ * STARTED event. Earlier runs of the same ticket do not count, so a resumed
+ * or retried ticket gets a fresh budget.
+ */
+export function currentRunCostUsd(events: PipelineEvent[]): number {
+  let start = 0;
+  events.forEach((e, i) => {
+    if (e.type === "STARTED") start = i;
+  });
+
+  let total = 0;
+  for (const event of events.slice(start)) {
+    if (event.type === "STAGE_COMPLETED") {
+      total += extractTokenUsage(event.output)?.costUsd ?? 0;
+    } else if (event.type === "STAGE_FAILED") {
+      total += extractTokenUsage(event)?.costUsd ?? 0;
+    }
+  }
+  return total;
+}
 
 export async function checkCostLimit(opts: {
   runDir: string;
@@ -8,16 +30,7 @@ export async function checkCostLimit(opts: {
   telegram: TelegramNotifier;
   ticketKey: string;
 }): Promise<"continue" | "abort"> {
-  const events = getEvents(opts.runDir);
-
-  let totalCost = 0;
-
-  for (const event of events) {
-    if (event.type !== "STAGE_COMPLETED") continue;
-    const tu = extractTokenUsage(event.output);
-    if (!tu) continue;
-    totalCost += estimateCostUsd(tu.inputTokens, tu.outputTokens, tu.model);
-  }
+  const totalCost = currentRunCostUsd(getEvents(opts.runDir));
 
   if (totalCost >= opts.maxCostUsd) {
     await opts.telegram.send(

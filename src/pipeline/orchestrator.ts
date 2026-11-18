@@ -20,6 +20,10 @@ import { notifyStage } from "./stages/9-notify.js";
 import type { Stage } from "./stages/types.js";
 import { runHook, HookError } from "./hooks.js";
 import { initBot } from "../integrations/telegram/bot.js";
+import { UsageRecorder } from "./token-usage.js";
+
+/** Thrown after a completed stage pushes the run over its cost limit */
+class CostLimitError extends Error {}
 
 const ALL_STAGES: Stage[] = [
   fetchStage,
@@ -50,6 +54,7 @@ export async function runPipeline(
   const memoryDir = getMemoryDir(config.name, ticketKey);
   const logger = createLogger(`pipeline:${ticketKey}`);
   const state = new StateManager(runDir);
+  const usage = new UsageRecorder();
 
   // Ensure bot is polling so human-in-the-loop handlers work
   if (config.telegram?.botToken) {
@@ -64,6 +69,7 @@ export async function runPipeline(
     projectDir,
     state,
     memoryDir,
+    usage,
     dryRun: opts.dryRun ?? false,
     logger,
     jira: getClientFromConfig(config.jira) as JiraClient,
@@ -115,12 +121,17 @@ export async function runPipeline(
       logger.info({ stage: stage.id }, `▶ ${stage.name}`);
       await ctx.telegram.notifyStageStarted(stage.id).catch(() => undefined);
 
+      // Drop anything a timed-out call from an earlier stage recorded late
+      usage.drain();
+
       try {
         const timeout = stageTimeoutMs(config, stage.id);
-        const output = timeout
+        const stageOutput = timeout
           ? await withTimeout(stage.run(ctx), timeout)
           : await stage.run(ctx);
 
+        const tokenUsage = usage.drain();
+        const output = tokenUsage ? { ...stageOutput, tokenUsage } : stageOutput;
         state.emit({ type: "STAGE_COMPLETED", stage: stage.id, output });
         logger.info({ stage: stage.id }, `✓ ${stage.name}`);
         await ctx.telegram
@@ -135,11 +146,9 @@ export async function runPipeline(
             ticketKey,
           });
           if (decision === "abort") {
-            state.emit({
-              type: "PIPELINE_ABORTED",
-              reason: "Cost limit exceeded",
-            });
-            throw new Error("Cost limit exceeded");
+            throw new CostLimitError(
+              `Cost limit exceeded after ${stage.id} ($${config.pipeline.maxCostUsdPerRun} per run)`,
+            );
           }
         }
 
@@ -178,7 +187,16 @@ export async function runPipeline(
           throw err;
         }
 
-        state.emit({ type: "STAGE_FAILED", stage: stage.id, error: message });
+        // The stage itself completed; the outer catch records the abort once
+        if (err instanceof CostLimitError) throw err;
+
+        const tokenUsage = usage.drain();
+        state.emit({
+          type: "STAGE_FAILED",
+          stage: stage.id,
+          error: message,
+          ...(tokenUsage ? { tokenUsage } : {}),
+        });
         await ctx.telegram
           .notifyStageFailed(stage.id, message)
           .catch(() => undefined);

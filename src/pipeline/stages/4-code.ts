@@ -1,14 +1,17 @@
 import type { Stage, PipelineContext, StageOutput } from "./types.js";
-import { runAgent, detectComplexity } from "../runner.js";
+import { runAgent, detectComplexity, type AgentModel } from "../runner.js";
 import {
   getContextFilesForStage,
   readTicketContext,
 } from "../../memory/context-builder.js";
 
+// Base model; detectComplexity may escalate a complex ticket to opus
+const MODEL: AgentModel = "sonnet";
+
 export const codeStage: Stage = {
   id: "code",
   name: "Code",
-  model: "sonnet",
+  model: MODEL,
 
   async run(ctx: PipelineContext): Promise<StageOutput> {
     const { config, ticketKey, memoryDir, projectDir } = ctx;
@@ -16,7 +19,7 @@ export const codeStage: Stage = {
     const ticketCtx = readTicketContext(memoryDir);
     const contextFiles = getContextFilesForStage(projectDir, memoryDir, "code");
 
-    const model = detectComplexity(ticketCtx);
+    const model = detectComplexity(ticketCtx, MODEL);
     ctx.logger.info({ ticketKey, model }, "Starting code agent");
 
     const branchName = buildBranchName(
@@ -55,6 +58,7 @@ ${config.workspace.buildCommand ? `Build command: ${config.workspace.buildComman
         timeoutMs: config.pipeline?.stageTimeouts?.code ?? 1_800_000,
         stallTimeoutMs: config.pipeline?.agentStallTimeoutMs ?? 300_000,
         logger: ctx.logger,
+        usage: ctx.usage,
       });
     }
 

@@ -1,88 +1,97 @@
 import { describe, it, expect } from "vitest";
 import {
   estimateCostUsd,
-  extractTokenUsage,
+  getModelPricing,
   MODEL_PRICING,
 } from "../utils/pricing.js";
+import { MODEL_IDS } from "../pipeline/runner.js";
 
-describe("estimateCostUsd", () => {
-  it("calculates cost for known model", () => {
-    // haiku: $0.8 input + $4.0 output per 1M tokens
-    const cost = estimateCostUsd(1_000_000, 1_000_000, "claude-haiku-4-5");
-    expect(cost).toBeCloseTo(4.8);
-  });
+const tokens = (
+  inputTokens: number,
+  outputTokens: number,
+  cacheCreationInputTokens = 0,
+  cacheReadInputTokens = 0,
+) => ({
+  inputTokens,
+  outputTokens,
+  cacheCreationInputTokens,
+  cacheReadInputTokens,
+});
 
-  it("calculates cost for sonnet", () => {
-    const cost = estimateCostUsd(500_000, 200_000, "claude-sonnet-4-5");
-    // (0.5 * 3.0) + (0.2 * 15.0) = 1.5 + 3.0 = 4.5
-    expect(cost).toBeCloseTo(4.5);
-  });
-
-  it("falls back to default pricing for unknown model", () => {
-    const defaultCost = estimateCostUsd(1_000_000, 1_000_000, "unknown-model");
-    const sonnetCost = estimateCostUsd(1_000_000, 1_000_000, "claude-sonnet-4");
-    expect(defaultCost).toBeCloseTo(sonnetCost);
-  });
-
-  it("returns 0 for zero tokens", () => {
-    expect(estimateCostUsd(0, 0, "claude-haiku-4-5")).toBe(0);
-  });
-
-  it("handles fractional token counts", () => {
-    const cost = estimateCostUsd(100, 100, "claude-haiku-4-5");
-    expect(cost).toBeGreaterThan(0);
-    expect(cost).toBeLessThan(0.01);
-  });
-
-  it("all models in MODEL_PRICING have positive prices", () => {
-    for (const [model, pricing] of Object.entries(MODEL_PRICING)) {
-      expect(pricing.inputPer1M, `${model} inputPer1M`).toBeGreaterThan(0);
-      expect(pricing.outputPer1M, `${model} outputPer1M`).toBeGreaterThan(0);
+describe("MODEL_PRICING", () => {
+  it("has a price for every model ID the runner sends", () => {
+    for (const id of Object.values(MODEL_IDS)) {
+      expect(getModelPricing(id), id).not.toBeNull();
     }
+  });
+
+  it("all prices are positive", () => {
+    for (const [model, p] of Object.entries(MODEL_PRICING)) {
+      expect(p.inputPer1M, `${model} input`).toBeGreaterThan(0);
+      expect(p.outputPer1M, `${model} output`).toBeGreaterThan(0);
+      expect(p.cacheWritePer1M, `${model} cache write`).toBeGreaterThan(0);
+      expect(p.cacheReadPer1M, `${model} cache read`).toBeGreaterThan(0);
+    }
+  });
+
+  // Pinned to https://platform.claude.com/docs/en/about-claude/pricing
+  // (looked up 2026-11-16). Update both together.
+  it.each([
+    ["claude-haiku-4-5-20251001", 1, 5, 1.25, 0.1],
+    ["claude-sonnet-4-6", 3, 15, 3.75, 0.3],
+    ["claude-opus-4-6", 5, 25, 6.25, 0.5],
+  ])("%s matches the published price", (id, input, output, write, read) => {
+    expect(MODEL_PRICING[id]).toEqual({
+      inputPer1M: input,
+      outputPer1M: output,
+      cacheWritePer1M: write,
+      cacheReadPer1M: read,
+    });
   });
 });
 
-describe("extractTokenUsage", () => {
-  it("extracts valid token usage", () => {
-    const output = {
-      tokenUsage: {
-        inputTokens: 100,
-        outputTokens: 200,
-        model: "claude-haiku-4-5",
-      },
-    };
-    expect(extractTokenUsage(output)).toEqual({
-      inputTokens: 100,
-      outputTokens: 200,
-      model: "claude-haiku-4-5",
-    });
+describe("getModelPricing", () => {
+  it("resolves the undated Haiku alias", () => {
+    expect(getModelPricing("claude-haiku-4-5")).toBe(
+      MODEL_PRICING["claude-haiku-4-5-20251001"],
+    );
   });
 
-  it("defaults model to claude-sonnet-4 if missing", () => {
-    const output = { tokenUsage: { inputTokens: 100, outputTokens: 200 } };
-    expect(extractTokenUsage(output)?.model).toBe("claude-sonnet-4");
+  it("strips a context-window tag such as [1m]", () => {
+    expect(getModelPricing("claude-sonnet-4-6[1m]")).toBe(
+      MODEL_PRICING["claude-sonnet-4-6"],
+    );
   });
 
-  it("returns null for null input", () => {
-    expect(extractTokenUsage(null)).toBeNull();
+  it("returns null for unknown models instead of borrowing a price", () => {
+    expect(getModelPricing("claude-sonnet-4")).toBeNull();
+    expect(getModelPricing("gpt-4")).toBeNull();
+  });
+});
+
+describe("estimateCostUsd", () => {
+  it("prices input and output", () => {
+    // 1M × $3 + 1M × $15
+    expect(
+      estimateCostUsd(tokens(1_000_000, 1_000_000), "claude-sonnet-4-6"),
+    ).toBeCloseTo(18);
   });
 
-  it("returns null for non-object input", () => {
-    expect(extractTokenUsage("string")).toBeNull();
-    expect(extractTokenUsage(42)).toBeNull();
+  it("prices cache writes and reads separately", () => {
+    // Haiku: 1M cache write × $1.25 + 1M cache read × $0.10
+    expect(
+      estimateCostUsd(
+        tokens(0, 0, 1_000_000, 1_000_000),
+        "claude-haiku-4-5-20251001",
+      ),
+    ).toBeCloseTo(1.35);
   });
 
-  it("returns null when tokenUsage is missing", () => {
-    expect(extractTokenUsage({ other: "field" })).toBeNull();
+  it("returns 0 for zero tokens", () => {
+    expect(estimateCostUsd(tokens(0, 0), "claude-opus-4-6")).toBe(0);
   });
 
-  it("returns null when inputTokens is not a number", () => {
-    const output = { tokenUsage: { inputTokens: "100", outputTokens: 200 } };
-    expect(extractTokenUsage(output)).toBeNull();
-  });
-
-  it("returns null when outputTokens is not a number", () => {
-    const output = { tokenUsage: { inputTokens: 100, outputTokens: null } };
-    expect(extractTokenUsage(output)).toBeNull();
+  it("returns null for an unknown model", () => {
+    expect(estimateCostUsd(tokens(100, 100), "unknown-model")).toBeNull();
   });
 });

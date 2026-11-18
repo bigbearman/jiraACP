@@ -10,7 +10,6 @@ import type { CIPollConfig } from "../ci-poller.js";
 export const gitStage: Stage = {
   id: "git",
   name: "Git & PR",
-  model: "haiku",
 
   async run(ctx: PipelineContext): Promise<StageOutput> {
     const { config, ticketKey, state } = ctx;
