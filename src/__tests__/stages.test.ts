@@ -375,14 +375,15 @@ describe("reviewStage", () => {
     await expect(reviewStage.run(ctx)).rejects.toThrow("No PR number in state");
   });
 
-  it("auto-merges in dryRun when no major issues", async () => {
+  it("does not merge in dryRun when no major issues", async () => {
     const { reviewStage } = await import("../pipeline/stages/6-review.js");
     const ctx = makeCtx({ dryRun: true });
     ctx.state.current.prNumber = 7;
     fs.mkdirSync(ctx.memoryDir, { recursive: true });
 
     const out = await reviewStage.run(ctx);
-    expect(out.merged).toBe(true);
+    expect(out.merged).toBe(false);
+    expect(ctx.github.mergePR).not.toHaveBeenCalled();
     expect(Array.isArray(out.issues)).toBe(true);
   });
 });
@@ -1041,8 +1042,7 @@ describe("reviewStage ?? fallbacks", () => {
     expect(out.merged).toBe(true);
   });
 
-  it("auto-approves in dryRun when needsHumanApproval is true", async () => {
-    // In dryRun, ctx.dryRun ? true : ... → approved = true without calling requestApproval
+  it("skips the approval gate in dryRun without approving or merging", async () => {
     const { reviewStage } = await import("../pipeline/stages/6-review.js");
     const ctx = makeCtx({ dryRun: true });
     ctx.state.current.prNumber = 34;
@@ -1050,8 +1050,9 @@ describe("reviewStage ?? fallbacks", () => {
     (ctx.config.github as Record<string, unknown>).majorIssueThreshold = 0;
     fs.mkdirSync(ctx.memoryDir, { recursive: true });
     const out = await reviewStage.run(ctx);
-    expect(out.merged).toBe(true);
-    expect(ctx.state.emit).toHaveBeenCalledWith(
+    expect(out.merged).toBe(false);
+    expect(ctx.github.mergePR).not.toHaveBeenCalled();
+    expect(ctx.state.emit).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "HUMAN_APPROVED" }),
     );
   });

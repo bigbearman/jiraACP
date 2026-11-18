@@ -192,10 +192,13 @@ export async function requestApproval(
     .map((i) => `• ${escapeHtml(i.message)}`)
     .join("\n");
 
+  // Approval is requested for every merge, not only when reviewers object
+  const summaryLines = issueLines
+    ? [`⚠️ <b>${ticketKey}</b> — Review found major issues`, "", issueLines]
+    : [`👀 <b>${ticketKey}</b> — Review found no major issues`];
+
   const text = [
-    `⚠️ <b>${ticketKey}</b> — Review found major issues`,
-    "",
-    issueLines,
+    ...summaryLines,
     "",
     "Approve to merge or reject to abort pipeline.",
     `Use /approve ${ticketKey} or /reject ${ticketKey}`,

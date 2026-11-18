@@ -53,6 +53,12 @@ export const ProjectConfigSchema = z.object({
     autoMergeStrategy: z.enum(["squash", "merge", "rebase"]).default("squash"),
     reviewers: z.array(z.string()).default([]),
     prDraftByDefault: z.boolean().default(false),
+    // Every merge waits for a human to approve it in Telegram unless this is
+    // set. When true, a PR whose reviewers report fewer than
+    // majorIssueThreshold major issues merges with no human in the loop, and
+    // reviewApprovalTimeoutAction "merge-anyway" is honoured. Doctor warns.
+    autoMergeWithoutHumanApproval: z.boolean().default(false),
+    // Only used when autoMergeWithoutHumanApproval is true.
     majorIssueThreshold: z.number().default(1),
     waitForCI: z.boolean().default(true),
     ciTimeoutMs: z.number().default(1_800_000),
@@ -130,6 +136,8 @@ export const ProjectConfigSchema = z.object({
           .enum(["skip", "abort", "proceed-with-warning"])
           .default("skip"),
         reviewApprovalTimeoutMs: z.number().default(86_400_000),
+        // "merge-anyway" is treated as "abort" unless
+        // github.autoMergeWithoutHumanApproval is true.
         reviewApprovalTimeoutAction: z
           .enum(["abort", "merge-anyway"])
           .default("abort"),

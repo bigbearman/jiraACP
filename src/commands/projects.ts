@@ -75,6 +75,7 @@ export async function projectsAdd(name: string): Promise<void> {
       branchPattern: "feature/{ticketKey}-{slug}",
       autoMergeStrategy: "squash",
       reviewers: [],
+      autoMergeWithoutHumanApproval: false,
       majorIssueThreshold: 1,
     },
     workspace: {

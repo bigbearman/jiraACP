@@ -59,8 +59,11 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
     const issues = [...parseIssues(logicRaw), ...parseIssues(qualityRaw)];
 
     const majorCount = issues.filter((i) => i.severity === "major").length;
+    // A human approves every merge unless auto-merge is explicitly opted into;
+    // only then does a clean review skip the Telegram gate.
+    const autoMerge = config.github.autoMergeWithoutHumanApproval ?? false;
     const threshold = config.github.majorIssueThreshold ?? 1;
-    const needsHumanApproval = majorCount >= threshold;
+    const needsHumanApproval = !autoMerge || majorCount >= threshold;
 
     writeReviewFeedback(memoryDir, {
       prNumber,
@@ -74,10 +77,18 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
         : `${majorCount} major, ${issues.length - majorCount} minor issue(s)`;
     await ctx.telegram.updateDetail(reviewSummary).catch(() => undefined);
 
+    if (ctx.dryRun) {
+      ctx.logger.info(
+        { ticketKey, prNumber, majorCount, needsHumanApproval },
+        "Dry run — human approval gate skipped, PR not merged",
+      );
+      return { prNumber, issues, merged: false };
+    }
+
     if (needsHumanApproval) {
       ctx.logger.warn(
         { ticketKey, majorCount },
-        "Major issues found — requesting human approval via Telegram",
+        "Requesting human approval via Telegram before merge",
       );
       await ctx.telegram
         .updateDetail(`⚠️ ${reviewSummary} — waiting for human approval…`)
@@ -89,26 +100,39 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
       });
 
       const hil = config.telegram.humanInTheLoop;
-      const approved = ctx.dryRun
-        ? true
-        : await requestApproval(
-            config.telegram.botToken,
-            config.telegram.chatId,
-            ticketKey,
-            issues,
-            {
-              timeoutMs: hil?.reviewApprovalTimeoutMs ?? 86_400_000,
-              onTimeout: hil?.reviewApprovalTimeoutAction ?? "abort",
-              topicId: config.telegram.topicId,
-              reminderIntervalMs: hil?.reminderIntervalMs,
-              maxReminders: hil?.maxReminders,
-              onReminder: (count) =>
-                ctx.state.emit({
-                  type: "APPROVAL_REMINDER_SENT",
-                  count,
-                }),
-            },
-          );
+      const configuredTimeoutAction =
+        hil?.reviewApprovalTimeoutAction ?? "abort";
+      // "merge-anyway" would merge with no human decision, so it counts as
+      // auto-merge and needs the same opt-in.
+      const onTimeout =
+        configuredTimeoutAction === "merge-anyway" && !autoMerge
+          ? "abort"
+          : configuredTimeoutAction;
+      if (onTimeout !== configuredTimeoutAction) {
+        ctx.logger.warn(
+          { ticketKey },
+          'reviewApprovalTimeoutAction "merge-anyway" ignored — github.autoMergeWithoutHumanApproval is off; timeout will abort',
+        );
+      }
+
+      const approved = await requestApproval(
+        config.telegram.botToken,
+        config.telegram.chatId,
+        ticketKey,
+        issues,
+        {
+          timeoutMs: hil?.reviewApprovalTimeoutMs ?? 86_400_000,
+          onTimeout,
+          topicId: config.telegram.topicId,
+          reminderIntervalMs: hil?.reminderIntervalMs,
+          maxReminders: hil?.maxReminders,
+          onReminder: (count) =>
+            ctx.state.emit({
+              type: "APPROVAL_REMINDER_SENT",
+              count,
+            }),
+        },
+      );
 
       if (approved) {
         ctx.state.emit({ type: "HUMAN_APPROVED" });
@@ -125,14 +149,12 @@ List issues as JSON: { "issues": [{ "severity": "minor"|"major", "message": "...
       }
     }
 
-    // Auto-merge (or post-approval merge)
-    if (!ctx.dryRun) {
-      await ctx.github.mergePR(
-        prNumber,
-        config.github.autoMergeStrategy ?? "squash",
-      );
-      ctx.logger.info({ ticketKey, prNumber }, "PR merged");
-    }
+    // Post-approval merge, or opted-in auto-merge of a clean review
+    await ctx.github.mergePR(
+      prNumber,
+      config.github.autoMergeStrategy ?? "squash",
+    );
+    ctx.logger.info({ ticketKey, prNumber }, "PR merged");
 
     return { prNumber, issues, merged: true };
   },
